@@ -1,27 +1,25 @@
 // ============================================
 // Aarohan SOS Alert
 // File        : screens/success_screen.dart
-// Description : SOS Success Confirmation Screen
+// Description : SOS Success Confirmation Screen (Sprint 2)
 // ============================================
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../utils/constants.dart';
+import '../models/dispatch/emergency_alert.dart';
+import '../models/dispatch/dispatch_result.dart';
 import 'dashboard_screen.dart';
 
 class SuccessScreen extends StatefulWidget {
-  final String message;
-  final String mapLink;
-  final double latitude;
-  final double longitude;
+  final EmergencyAlert alert;
+  final DispatchResult dispatchResult;
 
   const SuccessScreen({
     super.key,
-    required this.message,
-    required this.mapLink,
-    required this.latitude,
-    required this.longitude,
+    required this.alert,
+    required this.dispatchResult,
   });
 
   @override
@@ -62,8 +60,12 @@ class _SuccessScreenState extends State<SuccessScreen>
     super.dispose();
   }
 
+  // ----------------------------
+  // Actions
+  // ----------------------------
+
   Future<void> _openMap() async {
-    final uri = Uri.parse(widget.mapLink);
+    final uri = Uri.parse(widget.alert.mapLink);
     if (await canLaunchUrl(uri)) {
       await launchUrl(uri, mode: LaunchMode.externalApplication);
     } else {
@@ -78,7 +80,7 @@ class _SuccessScreenState extends State<SuccessScreen>
   }
 
   void _copyMessage() {
-    Clipboard.setData(ClipboardData(text: widget.message));
+    Clipboard.setData(ClipboardData(text: widget.alert.message));
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
         content: Row(
@@ -99,22 +101,77 @@ class _SuccessScreenState extends State<SuccessScreen>
   void _returnToDashboard() {
     Navigator.pushAndRemoveUntil(
       context,
-      MaterialPageRoute(
-        builder: (context) => const DashboardScreen(),
-      ),
+      MaterialPageRoute(builder: (context) => const DashboardScreen()),
       (route) => false,
     );
   }
+
+  // ----------------------------
+  // Status Color Helpers
+  // ----------------------------
+
+  Color get _statusColor {
+    switch (widget.dispatchResult.status) {
+      case DispatchStatus.success:
+        return Colors.green;
+      case DispatchStatus.partialSuccess:
+        return Colors.orange;
+      case DispatchStatus.failed:
+        return primaryRed;
+      case DispatchStatus.skipped:
+        return mediumGrey;
+    }
+  }
+
+  IconData get _statusIcon {
+    switch (widget.dispatchResult.status) {
+      case DispatchStatus.success:
+        return Icons.check_circle;
+      case DispatchStatus.partialSuccess:
+        return Icons.warning_amber_rounded;
+      case DispatchStatus.failed:
+        return Icons.error_outline;
+      case DispatchStatus.skipped:
+        return Icons.skip_next;
+    }
+  }
+
+  String get _statusTitle {
+    switch (widget.dispatchResult.status) {
+      case DispatchStatus.success:
+        return 'SOS Alert Dispatched';
+      case DispatchStatus.partialSuccess:
+        return 'SOS Partially Dispatched';
+      case DispatchStatus.failed:
+        return 'SOS Dispatch Failed';
+      case DispatchStatus.skipped:
+        return 'SOS Dispatch Skipped';
+    }
+  }
+
+  String get _statusSubtitle {
+    switch (widget.dispatchResult.status) {
+      case DispatchStatus.success:
+        return 'Emergency workflow completed successfully';
+      case DispatchStatus.partialSuccess:
+        return 'Some contacts could not be notified';
+      case DispatchStatus.failed:
+        return widget.dispatchResult.errorMessage ??
+            'Dispatch operation failed';
+      case DispatchStatus.skipped:
+        return widget.dispatchResult.errorMessage ??
+            'Dispatch was skipped';
+    }
+  }
+
+  // ----------------------------
+  // Build
+  // ----------------------------
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: primaryNavy,
-
-      // ----------------------------
-      // Fixed Return Button at Bottom
-      // ----------------------------
-
       bottomNavigationBar: Padding(
         padding: const EdgeInsets.fromLTRB(
           paddingLarge,
@@ -151,24 +208,18 @@ class _SuccessScreenState extends State<SuccessScreen>
           ),
         ),
       ),
-
       body: SafeArea(
         child: FadeTransition(
           opacity: _fadeAnimation,
-
-          // ----------------------------
-          // Full Screen Scrollable
-          // ----------------------------
-
           child: SingleChildScrollView(
             padding: const EdgeInsets.all(paddingLarge),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.center,
               children: [
-                const SizedBox(height: paddingLarge),
+                const SizedBox(height: paddingMedium),
 
                 // ----------------------------
-                // Success Icon
+                // Status Icon
                 // ----------------------------
 
                 ScaleTransition(
@@ -178,22 +229,19 @@ class _SuccessScreenState extends State<SuccessScreen>
                     height: 120,
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
-                      color: Colors.green.withOpacity(0.15),
-                      border: Border.all(
-                        color: Colors.green,
-                        width: 3,
-                      ),
+                      color: _statusColor.withOpacity(0.15),
+                      border: Border.all(color: _statusColor, width: 3),
                       boxShadow: [
                         BoxShadow(
-                          color: Colors.green.withOpacity(0.3),
+                          color: _statusColor.withOpacity(0.3),
                           blurRadius: 30,
                           spreadRadius: 5,
                         ),
                       ],
                     ),
-                    child: const Icon(
-                      Icons.check,
-                      color: Colors.green,
+                    child: Icon(
+                      _statusIcon,
+                      color: _statusColor,
                       size: 64,
                     ),
                   ),
@@ -202,14 +250,14 @@ class _SuccessScreenState extends State<SuccessScreen>
                 const SizedBox(height: paddingLarge),
 
                 // ----------------------------
-                // Title
+                // Title + Subtitle
                 // ----------------------------
 
-                const Text(
-                  'SOS Alert Activated',
+                Text(
+                  _statusTitle,
                   textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontSize: 26,
+                  style: const TextStyle(
+                    fontSize: 24,
                     fontWeight: FontWeight.w900,
                     color: whiteColor,
                     letterSpacing: 1,
@@ -219,21 +267,30 @@ class _SuccessScreenState extends State<SuccessScreen>
                 const SizedBox(height: paddingSmall),
 
                 Text(
-                  'Emergency workflow executed successfully',
+                  _statusSubtitle,
                   textAlign: TextAlign.center,
                   style: TextStyle(
                     fontSize: 14,
                     color: mediumGrey.withOpacity(0.8),
+                    height: 1.5,
                   ),
                 ),
 
                 const SizedBox(height: paddingXLarge),
 
                 // ----------------------------
-                // Status Steps Card
+                // Dispatch Summary Card
                 // ----------------------------
 
-                _buildStatusCard(),
+                _buildDispatchSummaryCard(),
+
+                const SizedBox(height: paddingLarge),
+
+                // ----------------------------
+                // Alert Details Card
+                // ----------------------------
+
+                _buildAlertDetailsCard(),
 
                 const SizedBox(height: paddingLarge),
 
@@ -260,81 +317,173 @@ class _SuccessScreenState extends State<SuccessScreen>
     );
   }
 
-  Widget _buildStatusCard() {
+  // ----------------------------
+  // Dispatch Summary Card
+  // ----------------------------
+
+  Widget _buildDispatchSummaryCard() {
+    final result = widget.dispatchResult;
+
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(paddingMedium),
       decoration: BoxDecoration(
         color: lightNavy,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.green.withOpacity(0.3)),
+        border: Border.all(color: _statusColor.withOpacity(0.4)),
       ),
       child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _buildStatusRow(
-            Icons.location_on,
-            'Location Retrieved',
-            '${widget.latitude.toStringAsFixed(4)}, '
-                '${widget.longitude.toStringAsFixed(4)}',
+          Row(
+            children: [
+              Icon(Icons.rocket_launch, color: _statusColor, size: 18),
+              const SizedBox(width: 8),
+              const Text(
+                'Dispatch Summary',
+                style: TextStyle(
+                  color: whiteColor,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 14,
+                ),
+              ),
+              const Spacer(),
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 4,
+                ),
+                decoration: BoxDecoration(
+                  color: _statusColor.withOpacity(0.15),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Text(
+                  result.status.label,
+                  style: TextStyle(
+                    color: _statusColor,
+                    fontSize: 11,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+            ],
+          ),
+
+          const SizedBox(height: paddingMedium),
+
+          _buildSummaryRow('Method', result.method.label),
+          _buildDivider(),
+
+          _buildSummaryRow(
+            'Recipients',
+            '${result.successCount} of ${result.recipientCount} contacts',
           ),
           _buildDivider(),
-          _buildStatusRow(
-            Icons.message,
-            'Emergency Message Prepared',
-            'Message ready to share',
+
+          _buildSummaryRow(
+            'Success Rate',
+            '${(result.successRate * 100).toStringAsFixed(0)}%',
           ),
-          _buildDivider(),
-          _buildStatusRow(
-            Icons.send,
-            'Emergency Workflow Executed',
-            'All steps completed',
+
+          if (result.errorMessage != null) ...[
+            _buildDivider(),
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 6),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(
+                    Icons.info_outline,
+                    color: primaryRed.withOpacity(0.7),
+                    size: 14,
+                  ),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      result.errorMessage!,
+                      style: TextStyle(
+                        color: primaryRed.withOpacity(0.9),
+                        fontSize: 12,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSummaryRow(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(
+            label,
+            style: const TextStyle(color: mediumGrey, fontSize: 13),
+          ),
+          Text(
+            value,
+            style: const TextStyle(
+              color: whiteColor,
+              fontSize: 13,
+              fontWeight: FontWeight.w500,
+            ),
           ),
         ],
       ),
     );
   }
 
-  Widget _buildStatusRow(IconData icon, String title, String subtitle) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: paddingSmall),
-      child: Row(
+  // ----------------------------
+  // Alert Details Card
+  // ----------------------------
+
+  Widget _buildAlertDetailsCard() {
+    final alert = widget.alert;
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(paddingMedium),
+      decoration: BoxDecoration(
+        color: lightNavy,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: primaryRed.withOpacity(0.2)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Container(
-            width: 36,
-            height: 36,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: Colors.green.withOpacity(0.15),
-            ),
-            child: const Icon(
-              Icons.check_circle,
-              color: Colors.green,
-              size: 20,
-            ),
-          ),
-          const SizedBox(width: paddingMedium),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  style: const TextStyle(
-                    color: whiteColor,
-                    fontWeight: FontWeight.bold,
-                    fontSize: 14,
-                  ),
+          const Row(
+            children: [
+              Icon(Icons.badge, color: primaryRed, size: 18),
+              SizedBox(width: 8),
+              Text(
+                'Alert Information',
+                style: TextStyle(
+                  color: whiteColor,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 14,
                 ),
-                Text(
-                  subtitle,
-                  style: const TextStyle(
-                    color: mediumGrey,
-                    fontSize: 12,
-                  ),
-                ),
-              ],
-            ),
+              ),
+            ],
           ),
+
+          const SizedBox(height: paddingMedium),
+
+          _buildSummaryRow('Alert ID', alert.alertId),
+          _buildDivider(),
+
+          _buildSummaryRow('User', alert.userName),
+          _buildDivider(),
+
+          _buildSummaryRow('Contacts', '${alert.contactCount}'),
+          _buildDivider(),
+
+          _buildSummaryRow('Timestamp', alert.formattedTimestamp),
         ],
       ),
     );
@@ -343,6 +492,10 @@ class _SuccessScreenState extends State<SuccessScreen>
   Widget _buildDivider() {
     return Divider(color: whiteColor.withOpacity(0.05), thickness: 1);
   }
+
+  // ----------------------------
+  // Location Card
+  // ----------------------------
 
   Widget _buildLocationCard() {
     return GestureDetector(
@@ -380,8 +533,11 @@ class _SuccessScreenState extends State<SuccessScreen>
                   ),
                   const SizedBox(height: 2),
                   Text(
-                    widget.mapLink,
-                    style: const TextStyle(color: primaryRed, fontSize: 11),
+                    widget.alert.formattedCoordinates,
+                    style: const TextStyle(
+                      color: primaryRed,
+                      fontSize: 11,
+                    ),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                   ),
@@ -394,6 +550,10 @@ class _SuccessScreenState extends State<SuccessScreen>
       ),
     );
   }
+
+  // ----------------------------
+  // Message Card
+  // ----------------------------
 
   Widget _buildMessageCard() {
     return Container(
@@ -409,7 +569,11 @@ class _SuccessScreenState extends State<SuccessScreen>
         children: [
           Row(
             children: [
-              const Icon(Icons.message_outlined, color: primaryRed, size: 18),
+              const Icon(
+                Icons.message_outlined,
+                color: primaryRed,
+                size: 18,
+              ),
               const SizedBox(width: 8),
               const Expanded(
                 child: Text(
@@ -460,7 +624,7 @@ class _SuccessScreenState extends State<SuccessScreen>
               borderRadius: BorderRadius.circular(12),
             ),
             child: Text(
-              widget.message,
+              widget.alert.message,
               style: TextStyle(
                 color: whiteColor.withOpacity(0.85),
                 fontSize: 13,

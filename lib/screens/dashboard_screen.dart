@@ -1,14 +1,15 @@
 // ============================================
 // Aarohan SOS Alert
 // File        : screens/dashboard_screen.dart
-// Description : Main SOS Dashboard
+// Description : Main SOS Dashboard (Sprint 2 - Refactored)
 // ============================================
 
 import 'package:flutter/material.dart';
 import '../utils/constants.dart';
 import '../models/user_model.dart';
+import '../models/dispatch/dispatch_result.dart';
 import '../services/storage_service.dart';
-import '../services/location_service.dart';
+import '../controllers/sos_controller.dart';
 import '../widgets/sos_button.dart';
 import 'contact_management_screen.dart';
 import 'success_screen.dart';
@@ -28,9 +29,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
   UserModel? _user;
   bool _isLoading = false;
   bool _isLoadingUser = true;
+  String _currentStage = '';
+
+  DispatchMethod _selectedMethod = DispatchMethod.share;
 
   final StorageService _storageService = StorageService();
-  final LocationService _locationService = LocationService();
+  final SosController _sosController = SosController();
 
   // ----------------------------
   // Init
@@ -40,6 +44,20 @@ class _DashboardScreenState extends State<DashboardScreen> {
   void initState() {
     super.initState();
     _loadUser();
+    _setupController();
+  }
+
+  // ----------------------------
+  // Setup Controller Progress Listener
+  // ----------------------------
+
+  void _setupController() {
+    _sosController.onProgress = (stage) {
+      if (!mounted) return;
+      setState(() {
+        _currentStage = stage.label;
+      });
+    };
   }
 
   // ----------------------------
@@ -60,37 +78,49 @@ class _DashboardScreenState extends State<DashboardScreen> {
   // ----------------------------
 
   Future<void> _onSOSPressed() async {
+    // Confirm before triggering
     final confirmed = await _showSOSConfirmDialog();
     if (!confirmed) return;
 
-    setState(() => _isLoading = true);
+    setState(() {
+      _isLoading = true;
+      _currentStage = 'Initializing...';
+    });
 
-    final locationResult = await _locationService.getCurrentLocation();
+    // ----------------------------
+    // Trigger via Controller
+    // ----------------------------
 
-    setState(() => _isLoading = false);
+    final result = await _sosController.triggerSOS(
+      dispatchMethod: _selectedMethod,
+    );
+
+    setState(() {
+      _isLoading = false;
+      _currentStage = '';
+    });
 
     if (!mounted) return;
 
-    if (!locationResult.success) {
-      _showLocationErrorDialog(
-        locationResult.errorMessage ?? 'Unknown error',
+    // ----------------------------
+    // Handle Result
+    // ----------------------------
+
+    if (!result.success) {
+      _showErrorDialog(
+        result.errorMessage ?? 'SOS workflow failed',
+        result.failedAtStage.label,
       );
       return;
     }
 
-    final message = buildEmergencyMessage(
-      _user?.name ?? 'User',
-      locationResult.mapLink ?? '',
-    );
-
+    // Navigate to success screen
     Navigator.push(
       context,
       MaterialPageRoute(
         builder: (context) => SuccessScreen(
-          message: message,
-          mapLink: locationResult.mapLink ?? '',
-          latitude: locationResult.latitude ?? 0.0,
-          longitude: locationResult.longitude ?? 0.0,
+          alert: result.alert!,
+          dispatchResult: result.dispatchResult!,
         ),
       ),
     );
@@ -124,9 +154,43 @@ class _DashboardScreenState extends State<DashboardScreen> {
             ),
           ],
         ),
-        content: const Text(
-          'This will send an emergency alert with your location to all your emergency contacts.',
-          style: TextStyle(color: mediumGrey, height: 1.5),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'This will send an emergency alert with your location to all your emergency contacts.',
+              style: TextStyle(color: mediumGrey, height: 1.5),
+            ),
+            const SizedBox(height: paddingMedium),
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: darkNavy,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Row(
+                children: [
+                  Icon(
+                    _selectedMethod == DispatchMethod.share
+                        ? Icons.share
+                        : Icons.science,
+                    color: primaryRed,
+                    size: 18,
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    'Method: ${_selectedMethod.label}',
+                    style: const TextStyle(
+                      color: whiteColor,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
         ),
         actions: [
           TextButton(
@@ -159,10 +223,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   // ----------------------------
-  // Location Error Dialog
+  // Error Dialog
   // ----------------------------
 
-  void _showLocationErrorDialog(String error) {
+  void _showErrorDialog(String error, String stage) {
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
@@ -172,35 +236,213 @@ class _DashboardScreenState extends State<DashboardScreen> {
         ),
         title: const Row(
           children: [
-            Icon(Icons.location_off, color: primaryRed),
+            Icon(Icons.error_outline, color: primaryRed),
             SizedBox(width: 8),
             Text(
-              'Location Error',
+              'SOS Failed',
               style: TextStyle(color: whiteColor),
             ),
           ],
         ),
-        content: Text(
-          error,
-          style: const TextStyle(color: mediumGrey),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              padding: const EdgeInsets.symmetric(
+                horizontal: 10,
+                vertical: 4,
+              ),
+              decoration: BoxDecoration(
+                color: primaryRed.withOpacity(0.15),
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: Text(
+                'Failed at: $stage',
+                style: const TextStyle(
+                  color: primaryRed,
+                  fontSize: 11,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+            const SizedBox(height: paddingMedium),
+            Text(
+              error,
+              style: const TextStyle(color: mediumGrey),
+            ),
+          ],
         ),
         actions: [
-          TextButton(
-            onPressed: () {
-              Navigator.pop(context);
-              _locationService.openLocationSettings();
-            },
-            child: const Text(
-              'Open Settings',
-              style: TextStyle(color: primaryRed),
-            ),
-          ),
           ElevatedButton(
             onPressed: () => Navigator.pop(context),
             style: ElevatedButton.styleFrom(backgroundColor: primaryRed),
             child: const Text('OK'),
           ),
         ],
+      ),
+    );
+  }
+
+  // ----------------------------
+  // Method Selector Bottom Sheet
+  // ----------------------------
+
+  void _showMethodSelector() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: lightNavy,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (context) => Padding(
+        padding: const EdgeInsets.all(paddingLarge),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Choose Dispatch Method',
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+                color: whiteColor,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'How would you like to send the emergency alert?',
+              style: TextStyle(
+                fontSize: 12,
+                color: mediumGrey.withOpacity(0.8),
+              ),
+            ),
+            const SizedBox(height: paddingLarge),
+
+            _buildMethodTile(
+              method: DispatchMethod.share,
+              icon: Icons.share,
+              title: 'Share Sheet',
+              subtitle: 'Send via WhatsApp, SMS, Email, etc',
+              available: true,
+            ),
+
+            _buildMethodTile(
+              method: DispatchMethod.simulation,
+              icon: Icons.science,
+              title: 'Simulation',
+              subtitle: 'Test mode (no message sent)',
+              available: true,
+            ),
+
+            _buildMethodTile(
+              method: DispatchMethod.sms,
+              icon: Icons.sms,
+              title: 'Direct SMS',
+              subtitle: 'Coming soon',
+              available: false,
+            ),
+
+            _buildMethodTile(
+              method: DispatchMethod.call,
+              icon: Icons.call,
+              title: 'Direct Call',
+              subtitle: 'Coming soon',
+              available: false,
+            ),
+
+            const SizedBox(height: paddingMedium),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMethodTile({
+    required DispatchMethod method,
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    required bool available,
+  }) {
+    final isSelected = _selectedMethod == method;
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: paddingSmall),
+      child: GestureDetector(
+        onTap: available
+            ? () {
+                setState(() => _selectedMethod = method);
+                Navigator.pop(context);
+              }
+            : null,
+        child: Container(
+          padding: const EdgeInsets.all(paddingMedium),
+          decoration: BoxDecoration(
+            color: isSelected
+                ? primaryRed.withOpacity(0.15)
+                : darkNavy,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: isSelected
+                  ? primaryRed
+                  : (available
+                      ? mediumGrey.withOpacity(0.2)
+                      : mediumGrey.withOpacity(0.1)),
+            ),
+          ),
+          child: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: available
+                      ? primaryRed.withOpacity(0.15)
+                      : mediumGrey.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Icon(
+                  icon,
+                  color: available ? primaryRed : mediumGrey,
+                  size: 22,
+                ),
+              ),
+              const SizedBox(width: paddingMedium),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: TextStyle(
+                        color: available ? whiteColor : mediumGrey,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 14,
+                      ),
+                    ),
+                    Text(
+                      subtitle,
+                      style: TextStyle(
+                        color: available
+                            ? mediumGrey
+                            : mediumGrey.withOpacity(0.5),
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              if (isSelected)
+                const Icon(Icons.check_circle, color: primaryRed),
+              if (!available)
+                Icon(
+                  Icons.lock_outline,
+                  color: mediumGrey.withOpacity(0.5),
+                  size: 18,
+                ),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -220,51 +462,82 @@ class _DashboardScreenState extends State<DashboardScreen> {
               )
             : Column(
                 children: [
-                  // ----------------------------
-                  // Top Bar
-                  // ----------------------------
-
                   _buildTopBar(),
-
-                  // ----------------------------
-                  // Scrollable Body
-                  // ----------------------------
-
                   Expanded(
                     child: SingleChildScrollView(
                       child: Column(
                         children: [
-                          // Status Card
                           _buildStatusCard(),
-
                           const SizedBox(height: paddingMedium),
 
-                          // Instruction Text
-                          Text(
-                            'Press SOS in Emergency',
-                            style: TextStyle(
-                              fontSize: 16,
-                              color: whiteColor.withOpacity(0.6),
-                              letterSpacing: 1,
+                          // Progress or Instruction
+                          if (_isLoading && _currentStage.isNotEmpty)
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: paddingMedium,
+                                vertical: paddingSmall,
+                              ),
+                              margin: const EdgeInsets.symmetric(
+                                horizontal: paddingLarge,
+                              ),
+                              decoration: BoxDecoration(
+                                color: primaryRed.withOpacity(0.15),
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(
+                                  color: primaryRed.withOpacity(0.3),
+                                ),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  const SizedBox(
+                                    width: 14,
+                                    height: 14,
+                                    child: CircularProgressIndicator(
+                                      color: primaryRed,
+                                      strokeWidth: 2,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 10),
+                                  Text(
+                                    _currentStage,
+                                    style: const TextStyle(
+                                      color: primaryRed,
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w500,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            )
+                          else
+                            Text(
+                              'Press SOS in Emergency',
+                              style: TextStyle(
+                                fontSize: 16,
+                                color: whiteColor.withOpacity(0.6),
+                                letterSpacing: 1,
+                              ),
                             ),
-                          ),
 
                           const SizedBox(height: 40),
 
-                          // SOS Button
                           SosButton(
                             onPressed: _onSOSPressed,
                             isLoading: _isLoading,
                           ),
 
-                          const SizedBox(height: 40),
+                          const SizedBox(height: 30),
 
-                          // Emergency Contacts Info
+                          // Dispatch Method Selector Button
+                          _buildMethodSelectorButton(),
+
+                          const SizedBox(height: paddingLarge),
+
                           _buildContactInfo(),
 
                           const SizedBox(height: paddingLarge),
 
-                          // Primary Contact Card
                           _buildPrimaryContactCard(),
 
                           const SizedBox(height: paddingLarge),
@@ -272,11 +545,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       ),
                     ),
                   ),
-
-                  // ----------------------------
-                  // Bottom Bar
-                  // ----------------------------
-
                   _buildBottomBar(),
                 ],
               ),
@@ -285,7 +553,56 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   // ----------------------------
-  // Top Bar Builder (With Real Logo)
+  // Method Selector Button
+  // ----------------------------
+
+  Widget _buildMethodSelectorButton() {
+    return GestureDetector(
+      onTap: _isLoading ? null : _showMethodSelector,
+      child: Container(
+        margin: const EdgeInsets.symmetric(horizontal: paddingLarge),
+        padding: const EdgeInsets.symmetric(
+          horizontal: paddingMedium,
+          vertical: paddingSmall,
+        ),
+        decoration: BoxDecoration(
+          color: lightNavy,
+          borderRadius: BorderRadius.circular(30),
+          border: Border.all(color: primaryRed.withOpacity(0.3)),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              _selectedMethod == DispatchMethod.share
+                  ? Icons.share
+                  : Icons.science,
+              color: primaryRed,
+              size: 16,
+            ),
+            const SizedBox(width: 8),
+            Text(
+              'Method: ${_selectedMethod.label}',
+              style: const TextStyle(
+                color: whiteColor,
+                fontSize: 12,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+            const SizedBox(width: 6),
+            Icon(
+              Icons.arrow_drop_down,
+              color: mediumGrey,
+              size: 18,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ----------------------------
+  // Top Bar
   // ----------------------------
 
   Widget _buildTopBar() {
@@ -306,10 +623,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
       ),
       child: Row(
         children: [
-          // ----------------------------
-          // Mini Logo Image
-          // ----------------------------
-
           Container(
             width: 48,
             height: 48,
@@ -329,13 +642,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
               ),
             ),
           ),
-
           const SizedBox(width: paddingMedium),
-
-          // ----------------------------
-          // App Name + Greeting
-          // ----------------------------
-
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -363,19 +670,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
               ],
             ),
           ),
-
-          // ----------------------------
-          // Shield Status Icon
-          // ----------------------------
-
           Container(
             padding: const EdgeInsets.all(8),
             decoration: BoxDecoration(
               color: primaryRed.withOpacity(0.15),
               borderRadius: BorderRadius.circular(10),
-              border: Border.all(
-                color: primaryRed.withOpacity(0.3),
-              ),
+              border: Border.all(color: primaryRed.withOpacity(0.3)),
             ),
             child: const Icon(
               Icons.verified_user,
@@ -389,7 +689,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   // ----------------------------
-  // Status Card Builder
+  // Status Card
   // ----------------------------
 
   Widget _buildStatusCard() {
@@ -405,7 +705,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
       ),
       child: Row(
         children: [
-          // Status Dot
           Container(
             width: 12,
             height: 12,
@@ -414,9 +713,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
               color: Colors.green,
             ),
           ),
-
           const SizedBox(width: 10),
-
           const Text(
             'System Ready',
             style: TextStyle(
@@ -425,10 +722,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
               fontSize: 14,
             ),
           ),
-
           const Spacer(),
-
-          // Contact Count Badge
           Container(
             padding: const EdgeInsets.symmetric(
               horizontal: 12,
@@ -470,7 +764,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   // ----------------------------
-  // Contact Info Builder
+  // Contact Info
   // ----------------------------
 
   Widget _buildContactInfo() {
@@ -506,11 +800,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Header
           Row(
             children: [
-              const Icon(Icons.notifications_active,
-                  color: primaryRed, size: 16),
+              const Icon(
+                Icons.notifications_active,
+                color: primaryRed,
+                size: 16,
+              ),
               const SizedBox(width: 6),
               Text(
                 'Alert will be sent to ${contacts.length} contact${contacts.length != 1 ? 's' : ''}',
@@ -521,10 +817,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
               ),
             ],
           ),
-
           const SizedBox(height: paddingSmall),
-
-          // Contact Chips
           Wrap(
             spacing: 8,
             runSpacing: 8,
@@ -580,7 +873,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   // ----------------------------
-  // Primary Contact Card Builder
+  // Primary Contact Card
   // ----------------------------
 
   Widget _buildPrimaryContactCard() {
@@ -599,7 +892,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
       ),
       child: Row(
         children: [
-          // Icon
           Container(
             padding: const EdgeInsets.all(10),
             decoration: BoxDecoration(
@@ -608,10 +900,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
             ),
             child: const Icon(Icons.star, color: primaryRed, size: 20),
           ),
-
           const SizedBox(width: paddingMedium),
-
-          // Info
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -643,8 +932,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
               ],
             ),
           ),
-
-          // Priority Badge
           Container(
             padding: const EdgeInsets.symmetric(
               horizontal: 8,
@@ -669,7 +956,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   // ----------------------------
-  // Bottom Bar Builder
+  // Bottom Bar
   // ----------------------------
 
   Widget _buildBottomBar() {
