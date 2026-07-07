@@ -1,11 +1,13 @@
 // ============================================
 // Aarohan SOS Alert
 // File        : services/dispatch/sms_dispatcher.dart
-// Description : SMS Dispatcher (Future Implementation)
-// Sprint      : 2 - Emergency Dispatch Engine
+// Description : SMS Dispatcher (Permission-Free URL Scheme)
+// Sprint      : 3 - Real Emergency Communication Layer
 // ============================================
 
 import 'dart:developer' as developer;
+import 'dart:io' show Platform;
+import 'package:url_launcher/url_launcher.dart';
 import '../../models/dispatch/emergency_alert.dart';
 import '../../models/dispatch/dispatch_result.dart';
 import 'dispatcher.dart';
@@ -14,20 +16,21 @@ import 'dispatcher.dart';
 // SMS Dispatcher
 // ----------------------------
 
-/// Dispatches emergency alerts via SMS.
+/// Dispatches emergency alerts via SMS using the sms: URL scheme.
 ///
-/// STATUS: Future Implementation Stub
+/// STATUS: Fully Implemented (Sprint 3)
 ///
-/// This dispatcher will eventually send actual SMS messages to
-/// all configured emergency contacts.
+/// Uses the native SMS URI scheme (like tel: for calls):
+/// - Opens the device's SMS app with recipients + message pre-filled
+/// - Works on both Android and iOS
+/// - Does NOT require SMS permission
+/// - Play Store safe
 ///
-/// Requires future integration with:
-/// - flutter_sms package OR
-/// - Native platform channels OR
-/// - Third-party SMS gateway (Twilio, MSG91, etc)
-///
-/// Current behavior:
-/// - Returns skipped result with implementation-pending message
+/// User Flow:
+/// 1. Dispatcher builds sms: URI with all contacts + message
+/// 2. SMS app opens with everything pre-filled
+/// 3. User taps SEND
+/// 4. SMS delivered to all recipients
 class SmsDispatcher extends Dispatcher {
   // ----------------------------
   // Configuration
@@ -49,10 +52,20 @@ class SmsDispatcher extends Dispatcher {
 
   @override
   Future<bool> isAvailable() async {
-    // TODO: Check SMS permission
-    // TODO: Verify SIM card is present
-    // TODO: Verify SMS capability on device
-    return false;
+    try {
+      // Only Android and iOS supported
+      if (!Platform.isAndroid && !Platform.isIOS) {
+        _log('SMS not supported on this platform');
+        return false;
+      }
+
+      // Check if sms: URI can be launched
+      final testUri = Uri(scheme: 'sms', path: '');
+      return await canLaunchUrl(testUri);
+    } catch (e) {
+      _log('Availability check failed: $e');
+      return false;
+    }
   }
 
   // ----------------------------
@@ -68,100 +81,107 @@ class SmsDispatcher extends Dispatcher {
       return validationError;
     }
 
-    // Step 2 - Check availability
-    final available = await isAvailable();
-    if (!available) {
-      _log('SMS dispatcher not yet implemented');
-      return DispatchResult.skipped(
+    // Step 2 - Check platform
+    if (!Platform.isAndroid && !Platform.isIOS) {
+      return DispatchResult.failure(
         method: method,
-        reason: 'SMS dispatch is not yet implemented in this version. '
-            'This feature will be available in a future release.',
+        errorMessage: 'SMS is only supported on Android and iOS devices',
+        recipientCount: alert.contactCount,
       );
     }
 
-    // ----------------------------
-    // Future Implementation Sketch
-    // ----------------------------
+    _log('=== SMS Dispatch Started ===');
+    _log('Alert ID     : ${alert.alertId}');
+    _log('Contacts     : ${alert.contactCount}');
 
     // Step 3 - Pre-dispatch hook
-    // await onBeforeDispatch(alert);
+    await onBeforeDispatch(alert);
 
-    // Step 4 - Loop through contacts
-    // int successCount = 0;
-    // int failureCount = 0;
-    // final failedContacts = <String>[];
-    //
-    // for (final contact in alert.contacts) {
-    //   try {
-    //     final sent = await _sendSms(
-    //       phoneNumber: contact.phone,
-    //       message: alert.message,
-    //     );
-    //
-    //     if (sent) {
-    //       successCount++;
-    //       _log('SMS sent to ${contact.name} (${contact.phone})');
-    //     } else {
-    //       failureCount++;
-    //       failedContacts.add(contact.name);
-    //       _log('SMS failed for ${contact.name}');
-    //     }
-    //   } catch (e) {
-    //     failureCount++;
-    //     failedContacts.add(contact.name);
-    //     _log('SMS error for ${contact.name}: $e');
-    //   }
-    // }
+    try {
+      // Step 4 - Extract and sanitize phone numbers
+      final recipients = alert.contactPhones
+          .map((phone) => _sanitizePhoneNumber(phone))
+          .join(',');
 
-    // Step 5 - Build result
-    // DispatchResult result;
-    // if (successCount == alert.contactCount) {
-    //   result = DispatchResult.success(
-    //     method: method,
-    //     recipientCount: alert.contactCount,
-    //   );
-    // } else if (successCount > 0) {
-    //   result = DispatchResult.partial(
-    //     method: method,
-    //     recipientCount: alert.contactCount,
-    //     successCount: successCount,
-    //     failureCount: failureCount,
-    //     errorMessage: 'Failed contacts: ${failedContacts.join(', ')}',
-    //   );
-    // } else {
-    //   result = DispatchResult.failure(
-    //     method: method,
-    //     recipientCount: alert.contactCount,
-    //     errorMessage: 'All SMS deliveries failed',
-    //   );
-    // }
+      _log('Recipients: $recipients');
 
-    // Step 6 - Post-dispatch hook
-    // await onAfterDispatch(alert, result);
-    // return result;
+      // Step 5 - Build sms: URI with pre-filled message
+      final smsUri = Uri(
+        scheme: 'sms',
+        path: recipients,
+        queryParameters: {'body': alert.message},
+      );
 
-    // ----------------------------
-    // Current Stub Return
-    // ----------------------------
+      _log('SMS URI: $smsUri');
 
-    return DispatchResult.skipped(
-      method: method,
-      reason: 'SMS dispatch implementation pending',
-    );
+      // Step 6 - Check if URI can be launched
+      final canLaunch = await canLaunchUrl(smsUri);
+      if (!canLaunch) {
+        _log('Cannot launch SMS URI');
+        return DispatchResult.failure(
+          method: method,
+          errorMessage: 'No SMS app available on this device',
+          recipientCount: alert.contactCount,
+        );
+      }
+
+      // Step 7 - Launch SMS app
+      _log('Opening SMS composer...');
+      final launched = await launchUrl(
+        smsUri,
+        mode: LaunchMode.externalApplication,
+      );
+
+      if (!launched) {
+        _log('Failed to open SMS app');
+        return DispatchResult.failure(
+          method: method,
+          errorMessage: 'Failed to open SMS app',
+          recipientCount: alert.contactCount,
+        );
+      }
+
+      // Step 8 - Build success result
+      final result = DispatchResult.success(
+        method: method,
+        recipientCount: alert.contactCount,
+        metadata: {
+          'alertId': alert.alertId,
+          'recipientPhones': alert.contactPhones,
+          'method': 'sms_uri_scheme',
+          'timestamp': DateTime.now().toIso8601String(),
+          'note': 'User must tap SEND in SMS app to actually send',
+        },
+      );
+
+      _log('SMS dispatch completed');
+      _log('Summary: ${result.summary}');
+      _log('===========================');
+
+      // Step 9 - Post-dispatch hook
+      await onAfterDispatch(alert, result);
+
+      return result;
+    } catch (e, stackTrace) {
+      _log('SMS dispatch error: $e');
+      _log('Stack: $stackTrace');
+
+      return DispatchResult.failure(
+        method: method,
+        errorMessage: 'SMS sending failed: ${e.toString()}',
+        recipientCount: alert.contactCount,
+      );
+    }
   }
 
   // ----------------------------
-  // Future Private Methods
+  // Phone Number Sanitization
   // ----------------------------
 
-  // Future<bool> _sendSms({
-  //   required String phoneNumber,
-  //   required String message,
-  // }) async {
-  //   // TODO: Integrate SMS sending package
-  //   // Recommended: flutter_sms or platform channels
-  //   throw UnimplementedError('SMS sending not yet implemented');
-  // }
+  String _sanitizePhoneNumber(String phone) {
+    // Keep only digits and +
+    return phone.replaceAll(RegExp(r'[^\d+]'), '');
+  }
 
   // ----------------------------
   // Internal Logging

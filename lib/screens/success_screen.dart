@@ -1,7 +1,7 @@
 // ============================================
 // Aarohan SOS Alert
 // File        : screens/success_screen.dart
-// Description : SOS Success Confirmation Screen (Sprint 2)
+// Description : SOS Success Confirmation Screen (Sprint 3)
 // ============================================
 
 import 'package:flutter/material.dart';
@@ -10,16 +10,19 @@ import 'package:url_launcher/url_launcher.dart';
 import '../utils/constants.dart';
 import '../models/dispatch/emergency_alert.dart';
 import '../models/dispatch/dispatch_result.dart';
+import '../models/dispatch/strategy/strategy_result.dart';
 import 'dashboard_screen.dart';
 
 class SuccessScreen extends StatefulWidget {
   final EmergencyAlert alert;
-  final DispatchResult dispatchResult;
+  final DispatchResult? dispatchResult;
+  final StrategyResult? strategyResult;
 
   const SuccessScreen({
     super.key,
     required this.alert,
-    required this.dispatchResult,
+    this.dispatchResult,
+    this.strategyResult,
   });
 
   @override
@@ -107,11 +110,34 @@ class _SuccessScreenState extends State<SuccessScreen>
   }
 
   // ----------------------------
-  // Status Color Helpers
+  // Status Helpers
   // ----------------------------
 
+  bool get _isMultiChannel => widget.strategyResult != null &&
+      widget.strategyResult!.totalAttempts > 1;
+
+  bool get _isOverallSuccess {
+    if (widget.strategyResult != null) {
+      return widget.strategyResult!.success;
+    }
+    return widget.dispatchResult?.success ?? false;
+  }
+
   Color get _statusColor {
-    switch (widget.dispatchResult.status) {
+    if (widget.strategyResult != null) {
+      if (widget.strategyResult!.success) {
+        if (widget.strategyResult!.status.label.contains('Partial')) {
+          return Colors.orange;
+        }
+        return Colors.green;
+      }
+      return primaryRed;
+    }
+
+    final result = widget.dispatchResult;
+    if (result == null) return primaryRed;
+
+    switch (result.status) {
       case DispatchStatus.success:
         return Colors.green;
       case DispatchStatus.partialSuccess:
@@ -124,20 +150,24 @@ class _SuccessScreenState extends State<SuccessScreen>
   }
 
   IconData get _statusIcon {
-    switch (widget.dispatchResult.status) {
-      case DispatchStatus.success:
-        return Icons.check_circle;
-      case DispatchStatus.partialSuccess:
-        return Icons.warning_amber_rounded;
-      case DispatchStatus.failed:
-        return Icons.error_outline;
-      case DispatchStatus.skipped:
-        return Icons.skip_next;
+    if (_isOverallSuccess) return Icons.check_circle;
+    if (widget.strategyResult != null &&
+        widget.strategyResult!.status.label.contains('Partial')) {
+      return Icons.warning_amber_rounded;
     }
+    return Icons.error_outline;
   }
 
   String get _statusTitle {
-    switch (widget.dispatchResult.status) {
+    if (_isMultiChannel) {
+      if (_isOverallSuccess) return 'Multi-Channel Alert Sent';
+      return 'Alert Dispatch Completed';
+    }
+
+    final result = widget.dispatchResult;
+    if (result == null) return 'SOS Completed';
+
+    switch (result.status) {
       case DispatchStatus.success:
         return 'SOS Alert Dispatched';
       case DispatchStatus.partialSuccess:
@@ -150,18 +180,10 @@ class _SuccessScreenState extends State<SuccessScreen>
   }
 
   String get _statusSubtitle {
-    switch (widget.dispatchResult.status) {
-      case DispatchStatus.success:
-        return 'Emergency workflow completed successfully';
-      case DispatchStatus.partialSuccess:
-        return 'Some contacts could not be notified';
-      case DispatchStatus.failed:
-        return widget.dispatchResult.errorMessage ??
-            'Dispatch operation failed';
-      case DispatchStatus.skipped:
-        return widget.dispatchResult.errorMessage ??
-            'Dispatch was skipped';
+    if (widget.strategyResult != null) {
+      return widget.strategyResult!.summary;
     }
+    return widget.dispatchResult?.summary ?? 'Emergency workflow completed';
   }
 
   // ----------------------------
@@ -218,10 +240,7 @@ class _SuccessScreenState extends State<SuccessScreen>
               children: [
                 const SizedBox(height: paddingMedium),
 
-                // ----------------------------
                 // Status Icon
-                // ----------------------------
-
                 ScaleTransition(
                   scale: _scaleAnimation,
                   child: Container(
@@ -249,10 +268,7 @@ class _SuccessScreenState extends State<SuccessScreen>
 
                 const SizedBox(height: paddingLarge),
 
-                // ----------------------------
-                // Title + Subtitle
-                // ----------------------------
-
+                // Title
                 Text(
                   _statusTitle,
                   textAlign: TextAlign.center,
@@ -271,41 +287,36 @@ class _SuccessScreenState extends State<SuccessScreen>
                   textAlign: TextAlign.center,
                   style: TextStyle(
                     fontSize: 14,
-                    color: mediumGrey.withOpacity(0.8),
+                    color: mediumGrey.withOpacity(0.9),
                     height: 1.5,
                   ),
                 ),
 
                 const SizedBox(height: paddingXLarge),
 
-                // ----------------------------
-                // Dispatch Summary Card
-                // ----------------------------
+                // Multi-Channel Breakdown (if strategy)
+                if (_isMultiChannel) _buildStrategyBreakdown(),
 
-                _buildDispatchSummaryCard(),
+                if (_isMultiChannel) const SizedBox(height: paddingLarge),
 
-                const SizedBox(height: paddingLarge),
+                // Single Dispatch Summary (if not strategy)
+                if (!_isMultiChannel && widget.dispatchResult != null)
+                  _buildSingleDispatchCard(),
 
-                // ----------------------------
+                if (!_isMultiChannel && widget.dispatchResult != null)
+                  const SizedBox(height: paddingLarge),
+
                 // Alert Details Card
-                // ----------------------------
-
                 _buildAlertDetailsCard(),
 
                 const SizedBox(height: paddingLarge),
 
-                // ----------------------------
                 // Location Card
-                // ----------------------------
-
                 _buildLocationCard(),
 
                 const SizedBox(height: paddingLarge),
 
-                // ----------------------------
                 // Message Card
-                // ----------------------------
-
                 _buildMessageCard(),
 
                 const SizedBox(height: paddingXLarge),
@@ -318,11 +329,297 @@ class _SuccessScreenState extends State<SuccessScreen>
   }
 
   // ----------------------------
-  // Dispatch Summary Card
+  // Strategy Breakdown Card
   // ----------------------------
 
-  Widget _buildDispatchSummaryCard() {
-    final result = widget.dispatchResult;
+  Widget _buildStrategyBreakdown() {
+    final strategy = widget.strategyResult!;
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(paddingMedium),
+      decoration: BoxDecoration(
+        color: lightNavy,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: _statusColor.withOpacity(0.4)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Header
+          Row(
+            children: [
+              Icon(Icons.rocket_launch, color: _statusColor, size: 18),
+              const SizedBox(width: 8),
+              const Expanded(
+                child: Text(
+                  'Multi-Channel Dispatch',
+                  style: TextStyle(
+                    color: whiteColor,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 14,
+                  ),
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 4,
+                ),
+                decoration: BoxDecoration(
+                  color: _statusColor.withOpacity(0.15),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Text(
+                  strategy.status.label,
+                  style: TextStyle(
+                    color: _statusColor,
+                    fontSize: 11,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+            ],
+          ),
+
+          const SizedBox(height: paddingMedium),
+
+          // Strategy Name
+          Container(
+            padding: const EdgeInsets.symmetric(
+              horizontal: 10,
+              vertical: 6,
+            ),
+            decoration: BoxDecoration(
+              color: darkNavy,
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Row(
+              children: [
+                Icon(
+                  Icons.alt_route,
+                  color: mediumGrey.withOpacity(0.6),
+                  size: 14,
+                ),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    strategy.config.displayName,
+                    style: const TextStyle(
+                      color: whiteColor,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+          const SizedBox(height: paddingMedium),
+
+          // Individual Results
+          const Text(
+            'DISPATCH RESULTS',
+            style: TextStyle(
+              color: mediumGrey,
+              fontSize: 10,
+              fontWeight: FontWeight.bold,
+              letterSpacing: 1.5,
+            ),
+          ),
+
+          const SizedBox(height: paddingSmall),
+
+          ...strategy.results.map((result) => _buildDispatchResultRow(result)),
+
+          const SizedBox(height: paddingMedium),
+
+          // Aggregate Stats
+          Container(
+            padding: const EdgeInsets.all(paddingSmall),
+            decoration: BoxDecoration(
+              color: darkNavy,
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Row(
+              children: [
+                Expanded(
+                  child: _buildStatColumn(
+                    'Attempts',
+                    '${strategy.totalAttempts}',
+                    Icons.rocket_launch,
+                  ),
+                ),
+                Container(
+                  width: 1,
+                  height: 30,
+                  color: mediumGrey.withOpacity(0.2),
+                ),
+                Expanded(
+                  child: _buildStatColumn(
+                    'Successful',
+                    '${strategy.successfulDispatchers}',
+                    Icons.check_circle,
+                    color: Colors.green,
+                  ),
+                ),
+                Container(
+                  width: 1,
+                  height: 30,
+                  color: mediumGrey.withOpacity(0.2),
+                ),
+                Expanded(
+                  child: _buildStatColumn(
+                    'Duration',
+                    '${(strategy.executionDuration.inMilliseconds / 1000).toStringAsFixed(1)}s',
+                    Icons.timer,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ----------------------------
+  // Single Dispatch Result Row
+  // ----------------------------
+
+  Widget _buildDispatchResultRow(DispatchResult result) {
+    Color rowColor;
+    IconData rowIcon;
+
+    switch (result.status) {
+      case DispatchStatus.success:
+        rowColor = Colors.green;
+        rowIcon = Icons.check_circle;
+        break;
+      case DispatchStatus.partialSuccess:
+        rowColor = Colors.orange;
+        rowIcon = Icons.warning_amber_rounded;
+        break;
+      case DispatchStatus.failed:
+        rowColor = primaryRed;
+        rowIcon = Icons.error;
+        break;
+      case DispatchStatus.skipped:
+        rowColor = mediumGrey;
+        rowIcon = Icons.skip_next;
+        break;
+    }
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: paddingSmall),
+      child: Container(
+        padding: const EdgeInsets.all(paddingSmall),
+        decoration: BoxDecoration(
+          color: darkNavy,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: rowColor.withOpacity(0.3)),
+        ),
+        child: Row(
+          children: [
+            Icon(rowIcon, color: rowColor, size: 18),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    result.method.label,
+                    style: const TextStyle(
+                      color: whiteColor,
+                      fontSize: 13,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  if (result.errorMessage != null)
+                    Text(
+                      result.errorMessage!,
+                      style: TextStyle(
+                        color: mediumGrey.withOpacity(0.8),
+                        fontSize: 10,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    )
+                  else
+                    Text(
+                      '${result.successCount}/${result.recipientCount} recipients',
+                      style: const TextStyle(
+                        color: mediumGrey,
+                        fontSize: 10,
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            Container(
+              padding: const EdgeInsets.symmetric(
+                horizontal: 6,
+                vertical: 2,
+              ),
+              decoration: BoxDecoration(
+                color: rowColor.withOpacity(0.15),
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: Text(
+                result.status.label,
+                style: TextStyle(
+                  color: rowColor,
+                  fontSize: 9,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ----------------------------
+  // Stat Column
+  // ----------------------------
+
+  Widget _buildStatColumn(
+    String label,
+    String value,
+    IconData icon, {
+    Color? color,
+  }) {
+    return Column(
+      children: [
+        Icon(icon, color: color ?? mediumGrey, size: 16),
+        const SizedBox(height: 2),
+        Text(
+          value,
+          style: TextStyle(
+            color: color ?? whiteColor,
+            fontSize: 13,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        Text(
+          label,
+          style: const TextStyle(
+            color: mediumGrey,
+            fontSize: 9,
+          ),
+        ),
+      ],
+    );
+  }
+
+  // ----------------------------
+  // Single Dispatch Card (Legacy)
+  // ----------------------------
+
+  Widget _buildSingleDispatchCard() {
+    final result = widget.dispatchResult!;
 
     return Container(
       width: double.infinity,
@@ -439,6 +736,10 @@ class _SuccessScreenState extends State<SuccessScreen>
     );
   }
 
+  Widget _buildDivider() {
+    return Divider(color: whiteColor.withOpacity(0.05), thickness: 1);
+  }
+
   // ----------------------------
   // Alert Details Card
   // ----------------------------
@@ -476,21 +777,14 @@ class _SuccessScreenState extends State<SuccessScreen>
 
           _buildSummaryRow('Alert ID', alert.alertId),
           _buildDivider(),
-
           _buildSummaryRow('User', alert.userName),
           _buildDivider(),
-
           _buildSummaryRow('Contacts', '${alert.contactCount}'),
           _buildDivider(),
-
           _buildSummaryRow('Timestamp', alert.formattedTimestamp),
         ],
       ),
     );
-  }
-
-  Widget _buildDivider() {
-    return Divider(color: whiteColor.withOpacity(0.05), thickness: 1);
   }
 
   // ----------------------------

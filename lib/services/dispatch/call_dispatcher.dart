@@ -1,48 +1,71 @@
 // ============================================
 // Aarohan SOS Alert
 // File        : services/dispatch/call_dispatcher.dart
-// Description : Call Dispatcher (Future Implementation)
-// Sprint      : 2 - Emergency Dispatch Engine
+// Description : Call Dispatcher (Real Implementation)
+// Sprint      : 3 - Real Emergency Communication Layer
 // ============================================
 
 import 'dart:developer' as developer;
+import 'dart:io' show Platform;
+import 'package:flutter_phone_direct_caller/flutter_phone_direct_caller.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../../models/dispatch/emergency_alert.dart';
 import '../../models/dispatch/dispatch_result.dart';
+import '../permission/permission_service.dart';
 import 'dispatcher.dart';
+
+// ----------------------------
+// Call Mode
+// ----------------------------
+
+enum CallMode {
+  /// Directly initiates the call. Requires CALL_PHONE permission.
+  direct,
+
+  /// Opens the dialer with number pre-filled. No permission needed.
+  /// User must tap the call button.
+  dialer,
+}
 
 // ----------------------------
 // Call Dispatcher
 // ----------------------------
 
-/// Dispatches emergency alerts via phone calls.
+/// Dispatches emergency alerts by initiating a phone call to the primary
+/// emergency contact.
 ///
-/// STATUS: Future Implementation Stub
+/// STATUS: Fully Implemented (Sprint 3)
 ///
-/// This dispatcher will eventually initiate a phone call to the
-/// primary emergency contact, with future support for sequential
-/// fallback calling to secondary contacts.
+/// Supports two modes:
+/// - [CallMode.direct] - Immediately calls (requires permission)
+/// - [CallMode.dialer] - Opens dialer with number (safer, no permission)
 ///
-/// Requires future integration with:
-/// - url_launcher (tel: scheme) OR
-/// - flutter_phone_direct_caller package OR
-/// - Native platform channels for direct dialing
+/// Default mode is [CallMode.dialer] for Play Store safety.
 ///
-/// Current behavior:
-/// - Returns skipped result with implementation-pending message
+/// User Flow (Dialer Mode - default):
+/// 1. Dispatcher extracts primary contact phone number
+/// 2. Android dialer opens with number pre-filled
+/// 3. User taps the green call button
+/// 4. Call initiated
+///
+/// User Flow (Direct Mode):
+/// 1. Dispatcher requests CALL_PHONE permission
+/// 2. Call is placed immediately without user tap
+/// 3. Android takes over the call UI
 class CallDispatcher extends Dispatcher {
   // ----------------------------
   // Configuration
   // ----------------------------
 
   final bool logToConsole;
-  final bool enableFallbackCalling;
-  final Duration fallbackWaitDuration;
+  final CallMode mode;
 
   CallDispatcher({
     this.logToConsole = true,
-    this.enableFallbackCalling = false,
-    this.fallbackWaitDuration = const Duration(seconds: 30),
+    this.mode = CallMode.dialer,
   });
+
+  final PermissionService _permissionService = PermissionService();
 
   // ----------------------------
   // Dispatcher Properties
@@ -56,10 +79,17 @@ class CallDispatcher extends Dispatcher {
 
   @override
   Future<bool> isAvailable() async {
-    // TODO: Check CALL_PHONE permission
-    // TODO: Verify device has telephony capability
-    // TODO: Verify SIM card is present
-    return false;
+    try {
+      // Only Android and iOS supported
+      if (!Platform.isAndroid && !Platform.isIOS) {
+        _log('Call not supported on this platform');
+        return false;
+      }
+      return true;
+    } catch (e) {
+      _log('Availability check failed: $e');
+      return false;
+    }
   }
 
   // ----------------------------
@@ -85,104 +115,169 @@ class CallDispatcher extends Dispatcher {
       );
     }
 
-    // Step 3 - Check availability
-    final available = await isAvailable();
-    if (!available) {
-      _log('Call dispatcher not yet implemented');
-      return DispatchResult.skipped(
+    // Step 3 - Check platform
+    if (!Platform.isAndroid && !Platform.isIOS) {
+      return DispatchResult.failure(
         method: method,
-        reason: 'Call dispatch is not yet implemented in this version. '
-            'This feature will be available in a future release.',
+        errorMessage: 'Call is only supported on Android and iOS',
+        recipientCount: 1,
       );
     }
 
-    // ----------------------------
-    // Future Implementation Sketch
-    // ----------------------------
+    // Step 4 - Log start
+    _log('=== Call Dispatch Started ===');
+    _log('Alert ID     : ${alert.alertId}');
+    _log('Mode         : ${mode.name}');
+    _log('Primary      : ${primary.name}');
+    _log('Number       : ${primary.phone}');
 
-    // Step 4 - Pre-dispatch hook
-    // await onBeforeDispatch(alert);
+    // Step 5 - Pre-dispatch hook
+    await onBeforeDispatch(alert);
 
-    // Step 5 - Attempt call to primary contact
-    // final callSuccess = await _initiateCall(primary.phone);
-    //
-    // if (callSuccess) {
-    //   _log('Call initiated to primary: ${primary.name} (${primary.phone})');
-    //
-    //   final result = DispatchResult.success(
-    //     method: method,
-    //     recipientCount: 1,
-    //     metadata: {
-    //       'primaryContactName': primary.name,
-    //       'primaryContactPhone': primary.phone,
-    //       'relationship': primary.relationship,
-    //     },
-    //   );
-    //
-    //   await onAfterDispatch(alert, result);
-    //   return result;
-    // }
+    try {
+      // Step 6 - Execute based on mode
+      DispatchResult result;
 
-    // Step 6 - Fallback calling (if enabled)
-    // if (enableFallbackCalling && alert.contacts.length > 1) {
-    //   for (int i = 1; i < alert.contacts.length; i++) {
-    //     final fallback = alert.contacts[i];
-    //     _log('Attempting fallback call to ${fallback.name}');
-    //
-    //     await Future.delayed(fallbackWaitDuration);
-    //
-    //     final fallbackSuccess = await _initiateCall(fallback.phone);
-    //     if (fallbackSuccess) {
-    //       final result = DispatchResult.success(
-    //         method: method,
-    //         recipientCount: 1,
-    //         metadata: {
-    //           'fallbackUsed': true,
-    //           'fallbackIndex': i,
-    //           'contactName': fallback.name,
-    //           'contactPhone': fallback.phone,
-    //         },
-    //       );
-    //       await onAfterDispatch(alert, result);
-    //       return result;
-    //     }
-    //   }
-    // }
+      if (mode == CallMode.direct) {
+        result = await _executeDirectCall(alert, primary.phone, primary.name);
+      } else {
+        result = await _executeDialerCall(alert, primary.phone, primary.name);
+      }
 
-    // Step 7 - All calls failed
-    // final result = DispatchResult.failure(
-    //   method: method,
-    //   recipientCount: alert.contactCount,
-    //   errorMessage: 'Unable to initiate call to any emergency contact',
-    // );
-    // await onAfterDispatch(alert, result);
-    // return result;
+      _log('Call dispatch completed');
+      _log('Summary: ${result.summary}');
+      _log('=============================');
 
-    // ----------------------------
-    // Current Stub Return
-    // ----------------------------
+      // Step 7 - Post-dispatch hook
+      await onAfterDispatch(alert, result);
 
-    return DispatchResult.skipped(
-      method: method,
-      reason: 'Call dispatch implementation pending',
-    );
+      return result;
+    } catch (e, stackTrace) {
+      _log('Call dispatch error: $e');
+      _log('Stack: $stackTrace');
+
+      return DispatchResult.failure(
+        method: method,
+        errorMessage: 'Call failed: ${e.toString()}',
+        recipientCount: 1,
+      );
+    }
   }
 
   // ----------------------------
-  // Future Private Methods
+  // Direct Call (Requires Permission)
   // ----------------------------
 
-  // Future<bool> _initiateCall(String phoneNumber) async {
-  //   // TODO: Integrate phone call package
-  //   // Recommended options:
-  //   //   1. url_launcher with tel: scheme (opens dialer)
-  //   //   2. flutter_phone_direct_caller (direct call)
-  //   //
-  //   // Example with url_launcher:
-  //   //   final uri = Uri.parse('tel:$phoneNumber');
-  //   //   return await launchUrl(uri);
-  //   throw UnimplementedError('Call initiation not yet implemented');
-  // }
+  Future<DispatchResult> _executeDirectCall(
+    EmergencyAlert alert,
+    String phone,
+    String contactName,
+  ) async {
+    _log('Attempting direct call...');
+
+    // Request phone permission
+    final permResult = await _permissionService.requestPhone();
+
+    if (!permResult.granted) {
+      _log('Phone permission denied');
+
+      // Automatically fall back to dialer mode
+      _log('Falling back to dialer mode');
+      return _executeDialerCall(alert, phone, contactName);
+    }
+
+    // Execute direct call
+    final callSuccess = await FlutterPhoneDirectCaller.callNumber(phone);
+
+    if (callSuccess == true) {
+      _log('Direct call initiated successfully');
+      return DispatchResult.success(
+        method: method,
+        recipientCount: 1,
+        metadata: {
+          'alertId': alert.alertId,
+          'mode': 'direct',
+          'contactName': contactName,
+          'contactPhone': phone,
+          'timestamp': DateTime.now().toIso8601String(),
+        },
+      );
+    } else {
+      _log('Direct call failed');
+      return DispatchResult.failure(
+        method: method,
+        errorMessage: 'Failed to initiate direct call to $contactName',
+        recipientCount: 1,
+      );
+    }
+  }
+
+  // ----------------------------
+  // Dialer Call (No Permission Needed)
+  // ----------------------------
+
+  Future<DispatchResult> _executeDialerCall(
+    EmergencyAlert alert,
+    String phone,
+    String contactName,
+  ) async {
+    _log('Opening dialer with pre-filled number...');
+
+    // Sanitize phone number
+    final sanitized = _sanitizePhoneNumber(phone);
+    final telUri = Uri(scheme: 'tel', path: sanitized);
+
+    _log('Tel URI: $telUri');
+
+    // Check if URL can be launched
+    final canLaunch = await canLaunchUrl(telUri);
+    if (!canLaunch) {
+      _log('Cannot launch dialer');
+      return DispatchResult.failure(
+        method: method,
+        errorMessage: 'Cannot open phone dialer on this device',
+        recipientCount: 1,
+      );
+    }
+
+    // Launch dialer
+    final launched = await launchUrl(
+      telUri,
+      mode: LaunchMode.externalApplication,
+    );
+
+    if (launched) {
+      _log('Dialer opened successfully');
+      return DispatchResult.success(
+        method: method,
+        recipientCount: 1,
+        metadata: {
+          'alertId': alert.alertId,
+          'mode': 'dialer',
+          'contactName': contactName,
+          'contactPhone': phone,
+          'note': 'User must tap call button to initiate',
+          'timestamp': DateTime.now().toIso8601String(),
+        },
+      );
+    } else {
+      _log('Failed to open dialer');
+      return DispatchResult.failure(
+        method: method,
+        errorMessage: 'Failed to open phone dialer',
+        recipientCount: 1,
+      );
+    }
+  }
+
+  // ----------------------------
+  // Phone Number Sanitization
+  // ----------------------------
+
+  String _sanitizePhoneNumber(String phone) {
+    // Keep only digits, +, and #
+    return phone.replaceAll(RegExp(r'[^\d+#]'), '');
+  }
 
   // ----------------------------
   // Internal Logging

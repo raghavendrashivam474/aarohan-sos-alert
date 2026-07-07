@@ -1,13 +1,14 @@
 // ============================================
 // Aarohan SOS Alert
 // File        : screens/dashboard_screen.dart
-// Description : Main SOS Dashboard (Sprint 2 - Refactored)
+// Description : Main SOS Dashboard (Sprint 3 - With Permission Guide)
 // ============================================
 
 import 'package:flutter/material.dart';
 import '../utils/constants.dart';
 import '../models/user_model.dart';
 import '../models/dispatch/dispatch_result.dart';
+import '../models/dispatch/strategy/strategy_config.dart';
 import '../services/storage_service.dart';
 import '../controllers/sos_controller.dart';
 import '../widgets/sos_button.dart';
@@ -31,7 +32,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   bool _isLoadingUser = true;
   String _currentStage = '';
 
-  DispatchMethod _selectedMethod = DispatchMethod.share;
+  StrategyConfig _selectedStrategy = StrategyConfig.shareOnly();
 
   final StorageService _storageService = StorageService();
   final SosController _sosController = SosController();
@@ -47,10 +48,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
     _setupController();
   }
 
-  // ----------------------------
-  // Setup Controller Progress Listener
-  // ----------------------------
-
   void _setupController() {
     _sosController.onProgress = (stage) {
       if (!mounted) return;
@@ -59,10 +56,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
       });
     };
   }
-
-  // ----------------------------
-  // Load User
-  // ----------------------------
 
   Future<void> _loadUser() async {
     setState(() => _isLoadingUser = true);
@@ -78,7 +71,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
   // ----------------------------
 
   Future<void> _onSOSPressed() async {
-    // Confirm before triggering
     final confirmed = await _showSOSConfirmDialog();
     if (!confirmed) return;
 
@@ -87,12 +79,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
       _currentStage = 'Initializing...';
     });
 
-    // ----------------------------
-    // Trigger via Controller
-    // ----------------------------
-
-    final result = await _sosController.triggerSOS(
-      dispatchMethod: _selectedMethod,
+    final result = await _sosController.triggerSOSWithStrategy(
+      _selectedStrategy,
     );
 
     setState(() {
@@ -102,11 +90,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
     if (!mounted) return;
 
-    // ----------------------------
-    // Handle Result
-    // ----------------------------
-
-    if (!result.success) {
+    if (!result.success && result.strategyResult == null) {
       _showErrorDialog(
         result.errorMessage ?? 'SOS workflow failed',
         result.failedAtStage.label,
@@ -114,13 +98,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
       return;
     }
 
-    // Navigate to success screen
     Navigator.push(
       context,
       MaterialPageRoute(
         builder: (context) => SuccessScreen(
           alert: result.alert!,
-          dispatchResult: result.dispatchResult!,
+          strategyResult: result.strategyResult,
+          dispatchResult: result.dispatchResult,
         ),
       ),
     );
@@ -171,20 +155,20 @@ class _DashboardScreenState extends State<DashboardScreen> {
               ),
               child: Row(
                 children: [
-                  Icon(
-                    _selectedMethod == DispatchMethod.share
-                        ? Icons.share
-                        : Icons.science,
+                  const Icon(
+                    Icons.rocket_launch,
                     color: primaryRed,
                     size: 18,
                   ),
                   const SizedBox(width: 8),
-                  Text(
-                    'Method: ${_selectedMethod.label}',
-                    style: const TextStyle(
-                      color: whiteColor,
-                      fontSize: 13,
-                      fontWeight: FontWeight.w500,
+                  Expanded(
+                    child: Text(
+                      'Strategy: ${_selectedStrategy.displayName}',
+                      style: const TextStyle(
+                        color: whiteColor,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w500,
+                      ),
                     ),
                   ),
                 ],
@@ -285,110 +269,508 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   // ----------------------------
-  // Method Selector Bottom Sheet
+  // Strategy Selector Bottom Sheet
   // ----------------------------
 
-  void _showMethodSelector() {
+  void _showStrategySelector() {
     showModalBottomSheet(
       context: context,
       backgroundColor: lightNavy,
+      isScrollControlled: true,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
-      builder: (context) => Padding(
-        padding: const EdgeInsets.all(paddingLarge),
+      builder: (context) => DraggableScrollableSheet(
+        initialChildSize: 0.75,
+        minChildSize: 0.5,
+        maxChildSize: 0.9,
+        expand: false,
+        builder: (context, scrollController) {
+          return SingleChildScrollView(
+            controller: scrollController,
+            padding: const EdgeInsets.all(paddingLarge),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Center(
+                  child: Container(
+                    width: 40,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: mediumGrey.withOpacity(0.3),
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: paddingMedium),
+                const Text(
+                  'Choose Dispatch Strategy',
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                    color: whiteColor,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'How would you like to send the emergency alert?',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: mediumGrey.withOpacity(0.8),
+                  ),
+                ),
+                const SizedBox(height: paddingLarge),
+
+                _buildSectionLabel('SINGLE CHANNEL'),
+
+                _buildStrategyTile(
+                  config: StrategyConfig.shareOnly(),
+                  icon: Icons.share,
+                  title: 'Share Sheet',
+                  subtitle: 'Send via WhatsApp, SMS, Email, etc',
+                ),
+                _buildStrategyTile(
+                  config: StrategyConfig.smsOnly(),
+                  icon: Icons.sms,
+                  title: 'SMS Only',
+                  subtitle: 'Send SMS to all contacts',
+                ),
+                _buildStrategyTile(
+                  config: StrategyConfig.callOnly(),
+                  icon: Icons.call,
+                  title: 'Call Only',
+                  subtitle: 'Call primary emergency contact',
+                ),
+                _buildStrategyTile(
+                  config: StrategyConfig.simulation(),
+                  icon: Icons.science,
+                  title: 'Simulation',
+                  subtitle: 'Test mode (no message sent)',
+                ),
+
+                const SizedBox(height: paddingLarge),
+
+                _buildSectionLabel('SEQUENTIAL (ONE AFTER ANOTHER)'),
+
+                _buildStrategyTile(
+                  config: StrategyConfig.smsThenShare(),
+                  icon: Icons.timeline,
+                  title: 'SMS → Share',
+                  subtitle: 'Send SMS first, then open share sheet',
+                ),
+                _buildStrategyTile(
+                  config: StrategyConfig.smsThenCall(),
+                  icon: Icons.timeline,
+                  title: 'SMS → Call',
+                  subtitle: 'Send SMS first, then call primary',
+                ),
+                _buildStrategyTile(
+                  config: StrategyConfig.allSequential(),
+                  icon: Icons.all_inclusive,
+                  title: 'All Channels',
+                  subtitle: 'SMS → Share → Call',
+                  highlighted: true,
+                ),
+
+                const SizedBox(height: paddingLarge),
+
+                _buildSectionLabel('FALLBACK (TRY UNTIL SUCCESS)'),
+
+                _buildStrategyTile(
+                  config: StrategyConfig.smsFallbackShare(),
+                  icon: Icons.alt_route,
+                  title: 'SMS with Share Fallback',
+                  subtitle: 'Try SMS, fall back to share sheet',
+                ),
+                _buildStrategyTile(
+                  config: StrategyConfig.callFallbackAll(),
+                  icon: Icons.alt_route,
+                  title: 'Full Fallback Chain',
+                  subtitle: 'Call ⇢ SMS ⇢ Share',
+                ),
+
+                const SizedBox(height: paddingMedium),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  // ----------------------------
+  // Permission Guide Bottom Sheet
+  // ----------------------------
+
+  void _showPermissionGuide() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: lightNavy,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (context) => DraggableScrollableSheet(
+        initialChildSize: 0.85,
+        minChildSize: 0.5,
+        maxChildSize: 0.95,
+        expand: false,
+        builder: (context, scrollController) {
+          return SingleChildScrollView(
+            controller: scrollController,
+            padding: const EdgeInsets.all(paddingLarge),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Center(
+                  child: Container(
+                    width: 40,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: mediumGrey.withOpacity(0.3),
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: paddingMedium),
+
+                const Row(
+                  children: [
+                    Icon(Icons.help_outline, color: primaryRed, size: 22),
+                    SizedBox(width: 8),
+                    Text(
+                      'How Each Method Works',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                        color: whiteColor,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'Understand permissions and what to expect',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: mediumGrey.withOpacity(0.8),
+                  ),
+                ),
+
+                const SizedBox(height: paddingLarge),
+
+                _buildGuideCard(
+                  icon: Icons.share,
+                  title: 'Share Sheet',
+                  color: Colors.green,
+                  permissionText: 'No permission required',
+                  worksText:
+                      'Opens Android share menu. You pick WhatsApp, SMS, Email, or any app.',
+                  userAction:
+                      'Tap on your preferred app when share sheet appears.',
+                  recommended: true,
+                ),
+
+                _buildGuideCard(
+                  icon: Icons.sms,
+                  title: 'SMS',
+                  color: Colors.orange,
+                  permissionText: 'Requires SMS permission',
+                  worksText:
+                      'Opens your SMS app with all contacts and message pre-filled.',
+                  userAction:
+                      'Grant SMS permission when asked, then tap SEND in the SMS app.',
+                ),
+
+                _buildGuideCard(
+                  icon: Icons.call,
+                  title: 'Call',
+                  color: Colors.orange,
+                  permissionText: 'No permission required (Dialer mode)',
+                  worksText:
+                      'Opens phone dialer with primary contact number pre-filled.',
+                  userAction:
+                      'Tap the green call button in your dialer.',
+                ),
+
+                _buildGuideCard(
+                  icon: Icons.science,
+                  title: 'Simulation',
+                  color: Colors.blue,
+                  permissionText: 'No permission required',
+                  worksText:
+                      'Test mode. Logs the dispatch but does not actually send anything.',
+                  userAction:
+                      'Use this to test the app without spamming your contacts.',
+                ),
+
+                const SizedBox(height: paddingLarge),
+
+                Container(
+                  padding: const EdgeInsets.all(paddingMedium),
+                  decoration: BoxDecoration(
+                    color: primaryRed.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: primaryRed.withOpacity(0.3)),
+                  ),
+                  child: const Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Icon(Icons.lightbulb, color: primaryRed, size: 18),
+                          SizedBox(width: 8),
+                          Text(
+                            'PRO TIPS',
+                            style: TextStyle(
+                              color: primaryRed,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 12,
+                              letterSpacing: 1.5,
+                            ),
+                          ),
+                        ],
+                      ),
+                      SizedBox(height: paddingSmall),
+                      Text(
+                        '• Start with Share Sheet - it always works\n'
+                        '• Grant SMS permission for silent dispatch\n'
+                        '• Use "All Channels" for maximum reach\n'
+                        '• Test with Simulation before real use\n'
+                        '• If a permission is permanently denied, go to app Settings to enable it',
+                        style: TextStyle(
+                          color: whiteColor,
+                          fontSize: 12,
+                          height: 1.6,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+
+                const SizedBox(height: paddingMedium),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  // ----------------------------
+  // Guide Card Builder
+  // ----------------------------
+
+  Widget _buildGuideCard({
+    required IconData icon,
+    required String title,
+    required Color color,
+    required String permissionText,
+    required String worksText,
+    required String userAction,
+    bool recommended = false,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: paddingMedium),
+      child: Container(
+        padding: const EdgeInsets.all(paddingMedium),
+        decoration: BoxDecoration(
+          color: darkNavy,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: recommended
+                ? color.withOpacity(0.6)
+                : color.withOpacity(0.3),
+            width: recommended ? 1.5 : 1,
+          ),
+        ),
         child: Column(
-          mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text(
-              'Choose Dispatch Method',
-              style: TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
-                color: whiteColor,
-              ),
+            Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: color.withOpacity(0.15),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Icon(icon, color: color, size: 20),
+                ),
+                const SizedBox(width: paddingSmall),
+                Text(
+                  title,
+                  style: const TextStyle(
+                    color: whiteColor,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 15,
+                  ),
+                ),
+                if (recommended) ...[
+                  const SizedBox(width: 6),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 6,
+                      vertical: 2,
+                    ),
+                    decoration: BoxDecoration(
+                      color: color,
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: const Text(
+                      'BEST',
+                      style: TextStyle(
+                        color: whiteColor,
+                        fontSize: 8,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                ],
+              ],
             ),
+
+            const SizedBox(height: paddingSmall),
+
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(
+                  Icons.security,
+                  color: mediumGrey.withOpacity(0.6),
+                  size: 14,
+                ),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    permissionText,
+                    style: TextStyle(
+                      color: mediumGrey.withOpacity(0.9),
+                      fontSize: 11,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+
             const SizedBox(height: 4),
-            Text(
-              'How would you like to send the emergency alert?',
-              style: TextStyle(
-                fontSize: 12,
-                color: mediumGrey.withOpacity(0.8),
+
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(
+                  Icons.info_outline,
+                  color: mediumGrey.withOpacity(0.6),
+                  size: 14,
+                ),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    worksText,
+                    style: TextStyle(
+                      color: whiteColor.withOpacity(0.7),
+                      fontSize: 11,
+                      height: 1.4,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+
+            const SizedBox(height: 4),
+
+            Container(
+              padding: const EdgeInsets.symmetric(
+                horizontal: 8,
+                vertical: 6,
+              ),
+              decoration: BoxDecoration(
+                color: color.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(
+                    Icons.touch_app,
+                    color: color.withOpacity(0.8),
+                    size: 14,
+                  ),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      userAction,
+                      style: TextStyle(
+                        color: color,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w500,
+                        height: 1.4,
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
-            const SizedBox(height: paddingLarge),
-
-            _buildMethodTile(
-              method: DispatchMethod.share,
-              icon: Icons.share,
-              title: 'Share Sheet',
-              subtitle: 'Send via WhatsApp, SMS, Email, etc',
-              available: true,
-            ),
-
-            _buildMethodTile(
-              method: DispatchMethod.simulation,
-              icon: Icons.science,
-              title: 'Simulation',
-              subtitle: 'Test mode (no message sent)',
-              available: true,
-            ),
-
-            _buildMethodTile(
-              method: DispatchMethod.sms,
-              icon: Icons.sms,
-              title: 'Direct SMS',
-              subtitle: 'Coming soon',
-              available: false,
-            ),
-
-            _buildMethodTile(
-              method: DispatchMethod.call,
-              icon: Icons.call,
-              title: 'Direct Call',
-              subtitle: 'Coming soon',
-              available: false,
-            ),
-
-            const SizedBox(height: paddingMedium),
           ],
         ),
       ),
     );
   }
 
-  Widget _buildMethodTile({
-    required DispatchMethod method,
+  // ----------------------------
+  // Section Label
+  // ----------------------------
+
+  Widget _buildSectionLabel(String label) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: paddingSmall, top: paddingSmall),
+      child: Text(
+        label,
+        style: TextStyle(
+          fontSize: 10,
+          fontWeight: FontWeight.bold,
+          color: primaryRed.withOpacity(0.8),
+          letterSpacing: 1.5,
+        ),
+      ),
+    );
+  }
+
+  // ----------------------------
+  // Strategy Tile
+  // ----------------------------
+
+  Widget _buildStrategyTile({
+    required StrategyConfig config,
     required IconData icon,
     required String title,
     required String subtitle,
-    required bool available,
+    bool highlighted = false,
   }) {
-    final isSelected = _selectedMethod == method;
+    final isSelected =
+        _selectedStrategy.displayName == config.displayName &&
+            _selectedStrategy.type == config.type;
 
     return Padding(
       padding: const EdgeInsets.only(bottom: paddingSmall),
       child: GestureDetector(
-        onTap: available
-            ? () {
-                setState(() => _selectedMethod = method);
-                Navigator.pop(context);
-              }
-            : null,
+        onTap: () {
+          setState(() => _selectedStrategy = config);
+          Navigator.pop(context);
+        },
         child: Container(
           padding: const EdgeInsets.all(paddingMedium),
           decoration: BoxDecoration(
-            color: isSelected
-                ? primaryRed.withOpacity(0.15)
-                : darkNavy,
+            color: isSelected ? primaryRed.withOpacity(0.15) : darkNavy,
             borderRadius: BorderRadius.circular(12),
             border: Border.all(
               color: isSelected
                   ? primaryRed
-                  : (available
-                      ? mediumGrey.withOpacity(0.2)
-                      : mediumGrey.withOpacity(0.1)),
+                  : (highlighted
+                      ? primaryRed.withOpacity(0.4)
+                      : mediumGrey.withOpacity(0.2)),
+              width: highlighted ? 1.5 : 1,
             ),
           ),
           child: Row(
@@ -396,36 +778,54 @@ class _DashboardScreenState extends State<DashboardScreen> {
               Container(
                 padding: const EdgeInsets.all(8),
                 decoration: BoxDecoration(
-                  color: available
-                      ? primaryRed.withOpacity(0.15)
-                      : mediumGrey.withOpacity(0.1),
+                  color: primaryRed.withOpacity(0.15),
                   borderRadius: BorderRadius.circular(8),
                 ),
-                child: Icon(
-                  icon,
-                  color: available ? primaryRed : mediumGrey,
-                  size: 22,
-                ),
+                child: Icon(icon, color: primaryRed, size: 22),
               ),
               const SizedBox(width: paddingMedium),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      title,
-                      style: TextStyle(
-                        color: available ? whiteColor : mediumGrey,
-                        fontWeight: FontWeight.bold,
-                        fontSize: 14,
-                      ),
+                    Row(
+                      children: [
+                        Text(
+                          title,
+                          style: const TextStyle(
+                            color: whiteColor,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 14,
+                          ),
+                        ),
+                        if (highlighted) ...[
+                          const SizedBox(width: 6),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 6,
+                              vertical: 2,
+                            ),
+                            decoration: BoxDecoration(
+                              color: primaryRed,
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: const Text(
+                              'RECOMMENDED',
+                              style: TextStyle(
+                                color: whiteColor,
+                                fontSize: 8,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ],
                     ),
+                    const SizedBox(height: 2),
                     Text(
                       subtitle,
-                      style: TextStyle(
-                        color: available
-                            ? mediumGrey
-                            : mediumGrey.withOpacity(0.5),
+                      style: const TextStyle(
+                        color: mediumGrey,
                         fontSize: 12,
                       ),
                     ),
@@ -434,12 +834,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
               ),
               if (isSelected)
                 const Icon(Icons.check_circle, color: primaryRed),
-              if (!available)
-                Icon(
-                  Icons.lock_outline,
-                  color: mediumGrey.withOpacity(0.5),
-                  size: 18,
-                ),
             ],
           ),
         ),
@@ -470,7 +864,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
                           _buildStatusCard(),
                           const SizedBox(height: paddingMedium),
 
-                          // Progress or Instruction
                           if (_isLoading && _currentStage.isNotEmpty)
                             Container(
                               padding: const EdgeInsets.symmetric(
@@ -529,8 +922,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
                           const SizedBox(height: 30),
 
-                          // Dispatch Method Selector Button
-                          _buildMethodSelectorButton(),
+                          _buildStrategyChip(),
 
                           const SizedBox(height: paddingLarge),
 
@@ -553,50 +945,81 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   // ----------------------------
-  // Method Selector Button
+  // Strategy Chip (WITH HELP BUTTON)
   // ----------------------------
 
-  Widget _buildMethodSelectorButton() {
-    return GestureDetector(
-      onTap: _isLoading ? null : _showMethodSelector,
-      child: Container(
-        margin: const EdgeInsets.symmetric(horizontal: paddingLarge),
-        padding: const EdgeInsets.symmetric(
-          horizontal: paddingMedium,
-          vertical: paddingSmall,
-        ),
-        decoration: BoxDecoration(
-          color: lightNavy,
-          borderRadius: BorderRadius.circular(30),
-          border: Border.all(color: primaryRed.withOpacity(0.3)),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(
-              _selectedMethod == DispatchMethod.share
-                  ? Icons.share
-                  : Icons.science,
-              color: primaryRed,
-              size: 16,
-            ),
-            const SizedBox(width: 8),
-            Text(
-              'Method: ${_selectedMethod.label}',
-              style: const TextStyle(
-                color: whiteColor,
-                fontSize: 12,
-                fontWeight: FontWeight.w500,
+  Widget _buildStrategyChip() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: paddingLarge),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Flexible(
+            child: GestureDetector(
+              onTap: _isLoading ? null : _showStrategySelector,
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: paddingMedium,
+                  vertical: paddingSmall,
+                ),
+                decoration: BoxDecoration(
+                  color: lightNavy,
+                  borderRadius: BorderRadius.circular(30),
+                  border: Border.all(color: primaryRed.withOpacity(0.3)),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(
+                      Icons.rocket_launch,
+                      color: primaryRed,
+                      size: 16,
+                    ),
+                    const SizedBox(width: 8),
+                    Flexible(
+                      child: Text(
+                        _selectedStrategy.displayName,
+                        style: const TextStyle(
+                          color: whiteColor,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w500,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    const Icon(
+                      Icons.arrow_drop_down,
+                      color: mediumGrey,
+                      size: 18,
+                    ),
+                  ],
+                ),
               ),
             ),
-            const SizedBox(width: 6),
-            Icon(
-              Icons.arrow_drop_down,
-              color: mediumGrey,
-              size: 18,
+          ),
+
+          const SizedBox(width: 8),
+
+          // Help Icon Button
+          GestureDetector(
+            onTap: _isLoading ? null : _showPermissionGuide,
+            child: Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: lightNavy,
+                shape: BoxShape.circle,
+                border: Border.all(color: primaryRed.withOpacity(0.3)),
+              ),
+              child: const Icon(
+                Icons.help_outline,
+                color: primaryRed,
+                size: 18,
+              ),
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }

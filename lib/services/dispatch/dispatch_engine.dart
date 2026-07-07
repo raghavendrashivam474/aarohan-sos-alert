@@ -1,33 +1,40 @@
 // ============================================
 // Aarohan SOS Alert
 // File        : services/dispatch/dispatch_engine.dart
-// Description : Central Dispatch Engine
-// Sprint      : 2 - Emergency Dispatch Engine
+// Description : Central Dispatch Engine (Sprint 3 - Strategy Aware)
+// Sprint      : 3 - Real Emergency Communication Layer
 // ============================================
 
 import 'dart:developer' as developer;
 import '../../models/dispatch/emergency_alert.dart';
 import '../../models/dispatch/dispatch_result.dart';
+import '../../models/dispatch/strategy/strategy_config.dart';
+import '../../models/dispatch/strategy/strategy_result.dart';
 import 'dispatcher.dart';
 import 'simulation_dispatcher.dart';
 import 'sms_dispatcher.dart';
 import 'call_dispatcher.dart';
 import 'share_dispatcher.dart';
+import 'strategy/dispatch_strategy.dart';
+import 'strategy/sequential_strategy.dart';
+import 'strategy/parallel_strategy.dart';
+import 'strategy/fallback_strategy.dart';
 
 // ----------------------------
 // Dispatch Engine
 // ----------------------------
 
-/// Central orchestrator for all emergency dispatchers.
+/// Central orchestrator for all emergency dispatchers and strategies.
 ///
 /// The engine:
-/// - Maintains a registry of available dispatchers
-/// - Selects appropriate dispatcher based on request
-/// - Coordinates single or multi-dispatcher dispatch
+/// - Maintains a registry of dispatchers
+/// - Maintains a registry of execution strategies
+/// - Selects appropriate strategy based on config
+/// - Coordinates multi-dispatcher execution
 /// - Aggregates results
 ///
 /// The UI and Controller layers interact ONLY with this engine.
-/// They never directly instantiate or call individual dispatchers.
+/// They never directly instantiate dispatchers or strategies.
 class DispatchEngine {
   // ----------------------------
   // Singleton Setup
@@ -38,100 +45,139 @@ class DispatchEngine {
 
   DispatchEngine._internal() {
     _registerDefaultDispatchers();
+    _registerDefaultStrategies();
   }
 
   // ----------------------------
-  // Dispatcher Registry
+  // Registries
   // ----------------------------
 
   final Map<DispatchMethod, Dispatcher> _dispatchers = {};
+  final Map<StrategyType, DispatchStrategy> _strategies = {};
 
-  DispatchMethod _preferredMethod = DispatchMethod.simulation;
+  DispatchMethod _preferredMethod = DispatchMethod.share;
+  StrategyConfig _defaultStrategy = StrategyConfig.shareOnly();
 
   // ----------------------------
   // Default Registration
   // ----------------------------
 
   void _registerDefaultDispatchers() {
-    register(SimulationDispatcher());
-    register(ShareDispatcher());
-    register(SmsDispatcher());
-    register(CallDispatcher());
+    registerDispatcher(SimulationDispatcher());
+    registerDispatcher(ShareDispatcher());
+    registerDispatcher(SmsDispatcher());
+    registerDispatcher(CallDispatcher());
+    _log('Registered ${_dispatchers.length} dispatchers');
+  }
 
-    _log('Dispatch Engine initialized with ${_dispatchers.length} dispatchers');
+  void _registerDefaultStrategies() {
+    registerStrategy(SequentialStrategy());
+    registerStrategy(ParallelStrategy());
+    registerStrategy(FallbackStrategy());
+    _log('Registered ${_strategies.length} strategies');
   }
 
   // ----------------------------
-  // Registration Management
+  // Dispatcher Registration
   // ----------------------------
 
-  /// Registers a dispatcher with the engine.
-  /// Existing dispatcher for the same method will be replaced.
-  void register(Dispatcher dispatcher) {
+  void registerDispatcher(Dispatcher dispatcher) {
     _dispatchers[dispatcher.method] = dispatcher;
-    _log('Registered: ${dispatcher.name}');
+    _log('Registered dispatcher: ${dispatcher.name}');
   }
 
-  /// Unregisters a dispatcher for the given method.
-  void unregister(DispatchMethod method) {
+  void unregisterDispatcher(DispatchMethod method) {
     final removed = _dispatchers.remove(method);
     if (removed != null) {
-      _log('Unregistered: ${removed.name}');
+      _log('Unregistered dispatcher: ${removed.name}');
     }
   }
 
-  /// Returns all registered dispatchers.
   List<Dispatcher> get allDispatchers => _dispatchers.values.toList();
 
-  /// Returns count of registered dispatchers.
   int get dispatcherCount => _dispatchers.length;
 
+  Dispatcher? getDispatcher(DispatchMethod method) => _dispatchers[method];
+
   // ----------------------------
-  // Preferred Method Configuration
+  // Strategy Registration
   // ----------------------------
 
-  /// Sets the preferred dispatch method used when no explicit method is passed.
+  void registerStrategy(DispatchStrategy strategy) {
+    _strategies[strategy.type] = strategy;
+    _log('Registered strategy: ${strategy.name}');
+  }
+
+  void unregisterStrategy(StrategyType type) {
+    final removed = _strategies.remove(type);
+    if (removed != null) {
+      _log('Unregistered strategy: ${removed.name}');
+    }
+  }
+
+  List<DispatchStrategy> get allStrategies => _strategies.values.toList();
+
+  int get strategyCount => _strategies.length;
+
+  DispatchStrategy? getStrategy(StrategyType type) => _strategies[type];
+
+  // ----------------------------
+  // Preferred Configuration
+  // ----------------------------
+
   void setPreferredMethod(DispatchMethod method) {
     if (!_dispatchers.containsKey(method)) {
-      _log('Warning: Preferred method ${method.label} is not registered');
+      _log('Warning: ${method.label} not registered');
       return;
     }
     _preferredMethod = method;
+    _defaultStrategy = StrategyConfig.single(method);
     _log('Preferred method set to: ${method.label}');
   }
 
+  void setDefaultStrategy(StrategyConfig config) {
+    _defaultStrategy = config;
+    _log('Default strategy set to: ${config.displayName}');
+  }
+
   DispatchMethod get preferredMethod => _preferredMethod;
+
+  StrategyConfig get defaultStrategy => _defaultStrategy;
 
   // ----------------------------
   // Availability Checks
   // ----------------------------
 
-  /// Returns list of dispatchers that are currently available.
   Future<List<Dispatcher>> getAvailableDispatchers() async {
     final available = <Dispatcher>[];
-
     for (final dispatcher in _dispatchers.values) {
       if (await dispatcher.isAvailable()) {
         available.add(dispatcher);
       }
     }
-
     return available;
   }
 
-  /// Checks if a specific dispatch method is available.
   Future<bool> isMethodAvailable(DispatchMethod method) async {
     final dispatcher = _dispatchers[method];
     if (dispatcher == null) return false;
     return await dispatcher.isAvailable();
   }
 
+  Future<Map<DispatchMethod, bool>> getAvailabilityMap() async {
+    final map = <DispatchMethod, bool>{};
+    for (final entry in _dispatchers.entries) {
+      map[entry.key] = await entry.value.isAvailable();
+    }
+    return map;
+  }
+
   // ----------------------------
   // Core Dispatch Methods
   // ----------------------------
 
-  /// Dispatches alert using the specified method.
-  /// If method not provided, uses the preferred method.
+  /// Dispatches alert using a single specified method.
+  /// Backward compatible with Sprint 2.
   Future<DispatchResult> dispatch(
     EmergencyAlert alert, {
     DispatchMethod? method,
@@ -139,7 +185,7 @@ class DispatchEngine {
     final selectedMethod = method ?? _preferredMethod;
     final dispatcher = _dispatchers[selectedMethod];
 
-    _log('=== Engine Dispatch Request ===');
+    _log('=== Single Dispatch ===');
     _log('Method       : ${selectedMethod.label}');
     _log('Alert ID     : ${alert.alertId}');
 
@@ -155,7 +201,7 @@ class DispatchEngine {
 
     try {
       final result = await dispatcher.dispatch(alert);
-      _log('Dispatch completed: ${result.summary}');
+      _log('Result: ${result.summary}');
       return result;
     } catch (e, stackTrace) {
       _log('Unexpected error: $e');
@@ -168,70 +214,120 @@ class DispatchEngine {
     }
   }
 
-  /// Dispatches alert through multiple methods in parallel.
-  /// Returns individual result for each attempted method.
+  // ----------------------------
+  // Strategy Execution
+  // ----------------------------
+
+  /// Executes dispatch using a full strategy configuration.
+  /// This is the NEW primary entry point in Sprint 3.
+  Future<StrategyResult> executeStrategy(
+    EmergencyAlert alert,
+    StrategyConfig config,
+  ) async {
+    _log('=== Strategy Execution ===');
+    _log('Alert ID     : ${alert.alertId}');
+    _log('Strategy     : ${config.type.label}');
+    _log('Methods      : ${config.methods.map((m) => m.label).join(", ")}');
+
+    // Validate strategy config
+    if (!config.isValid) {
+      _log('Invalid config: ${config.validationError}');
+      return StrategyResult.empty(
+        config: config,
+        reason: config.validationError ?? 'Invalid strategy configuration',
+      );
+    }
+
+    // Get the strategy implementation
+    final strategy = _strategies[config.type];
+    if (strategy == null) {
+      _log('No strategy registered for ${config.type.label}');
+      return StrategyResult.empty(
+        config: config,
+        reason: 'No strategy registered for ${config.type.label}',
+      );
+    }
+
+    _log('Executing via: ${strategy.name}');
+
+    // Execute
+    try {
+      final result = await strategy.execute(
+        alert: alert,
+        dispatchers: _dispatchers,
+        config: config,
+      );
+      _log('Strategy completed: ${result.summary}');
+      return result;
+    } catch (e, stackTrace) {
+      _log('Strategy execution error: $e');
+      _log('Stack: $stackTrace');
+      return StrategyResult.empty(
+        config: config,
+        reason: 'Strategy execution failed: ${e.toString()}',
+      );
+    }
+  }
+
+  /// Convenience: Execute using the current default strategy.
+  Future<StrategyResult> executeDefaultStrategy(
+    EmergencyAlert alert,
+  ) async {
+    return executeStrategy(alert, _defaultStrategy);
+  }
+
+  // ----------------------------
+  // Legacy Multi-Dispatch (Sprint 2 API)
+  // ----------------------------
+
+  /// Legacy API from Sprint 2. Delegates to parallel strategy.
+  @Deprecated('Use executeStrategy() with StrategyType.parallel instead')
   Future<Map<DispatchMethod, DispatchResult>> dispatchMultiple(
     EmergencyAlert alert, {
     required List<DispatchMethod> methods,
   }) async {
-    _log('=== Multi-Method Dispatch ===');
-    _log('Methods      : ${methods.map((m) => m.label).join(", ")}');
+    final config = StrategyConfig(
+      type: StrategyType.parallel,
+      methods: methods,
+    );
 
-    final results = <DispatchMethod, DispatchResult>{};
-    final futures = <Future<void>>[];
+    final strategyResult = await executeStrategy(alert, config);
 
-    for (final method in methods) {
-      futures.add(
-        dispatch(alert, method: method).then((result) {
-          results[method] = result;
-        }),
-      );
+    // Convert to legacy format
+    final legacyMap = <DispatchMethod, DispatchResult>{};
+    for (final result in strategyResult.results) {
+      legacyMap[result.method] = result;
     }
-
-    await Future.wait(futures);
-
-    _log('Multi-dispatch complete: ${results.length} results');
-    return results;
+    return legacyMap;
   }
 
-  /// Dispatches alert using the first available dispatcher from the priority list.
-  /// Falls back to next dispatcher if current one fails or is unavailable.
+  /// Legacy API from Sprint 2. Delegates to fallback strategy.
+  @Deprecated('Use executeStrategy() with StrategyType.fallback instead')
   Future<DispatchResult> dispatchWithFallback(
     EmergencyAlert alert, {
     required List<DispatchMethod> priorityOrder,
   }) async {
-    _log('=== Fallback Dispatch ===');
-    _log('Priority     : ${priorityOrder.map((m) => m.label).join(" → ")}');
+    final config = StrategyConfig(
+      type: StrategyType.fallback,
+      methods: priorityOrder,
+      stopOnFirstSuccess: true,
+    );
 
-    for (final method in priorityOrder) {
-      final dispatcher = _dispatchers[method];
+    final strategyResult = await executeStrategy(alert, config);
 
-      if (dispatcher == null) {
-        _log('Skipping ${method.label}: not registered');
-        continue;
-      }
-
-      final available = await dispatcher.isAvailable();
-      if (!available) {
-        _log('Skipping ${method.label}: not available');
-        continue;
-      }
-
-      _log('Trying ${method.label}...');
-      final result = await dispatcher.dispatch(alert);
-
-      if (result.success) {
-        _log('Fallback dispatch succeeded via ${method.label}');
-        return result;
-      }
-
-      _log('${method.label} failed, trying next...');
+    // Return the successful result, or the last failure
+    for (final result in strategyResult.results) {
+      if (result.success) return result;
     }
 
-    _log('All fallback options exhausted');
+    if (strategyResult.results.isNotEmpty) {
+      return strategyResult.results.last;
+    }
+
     return DispatchResult.failure(
       method: DispatchMethod.none,
-      errorMessage: 'All dispatch methods failed or unavailable',
+      errorMessage: strategyResult.abortReason ??
+          'All dispatch methods failed',
       recipientCount: alert.contactCount,
     );
   }
@@ -243,9 +339,13 @@ class DispatchEngine {
   Map<String, dynamic> getEngineStatus() {
     return {
       'dispatcherCount': _dispatchers.length,
+      'strategyCount': _strategies.length,
       'preferredMethod': _preferredMethod.label,
-      'registeredMethods':
+      'defaultStrategy': _defaultStrategy.displayName,
+      'registeredDispatchers':
           _dispatchers.keys.map((m) => m.label).toList(),
+      'registeredStrategies':
+          _strategies.keys.map((t) => t.label).toList(),
     };
   }
 
