@@ -1,12 +1,12 @@
 // ============================================
 // Aarohan SOS Alert
 // File        : models/dispatch/emergency_alert.dart
-// Description : Emergency Alert Data Model
-// Sprint      : 2 - Emergency Dispatch Engine
+// Description : Emergency Alert Data Model (Sprint 4 - With Emergency Type)
 // ============================================
 
 import '../user_model.dart';
 import '../contact_model.dart';
+import '../emergency/emergency_type.dart';
 
 // ----------------------------
 // Emergency Alert Model
@@ -25,6 +25,7 @@ class EmergencyAlert {
   final String mapLink;
   final String message;
   final DateTime timestamp;
+  final EmergencyType emergencyType;
   final Map<String, dynamic> metadata;
 
   // ----------------------------
@@ -40,6 +41,7 @@ class EmergencyAlert {
     required this.mapLink,
     required this.message,
     DateTime? timestamp,
+    this.emergencyType = EmergencyType.general,
     this.metadata = const {},
   })  : alertId = alertId ??
             'ALT_${DateTime.now().millisecondsSinceEpoch}',
@@ -80,6 +82,19 @@ class EmergencyAlert {
   }
 
   // ----------------------------
+  // Emergency Type Helpers
+  // ----------------------------
+
+  /// Returns true if the alert has a specific (non-general) emergency type.
+  bool get hasSpecificType => emergencyType != EmergencyType.general;
+
+  /// Returns the emergency type emoji.
+  String get emergencyEmoji => emergencyType.emoji;
+
+  /// Returns the emergency type label.
+  String get emergencyLabel => emergencyType.label;
+
+  // ----------------------------
   // Validation
   // ----------------------------
 
@@ -111,6 +126,7 @@ class EmergencyAlert {
     String? mapLink,
     String? message,
     DateTime? timestamp,
+    EmergencyType? emergencyType,
     Map<String, dynamic>? metadata,
   }) {
     return EmergencyAlert(
@@ -122,8 +138,15 @@ class EmergencyAlert {
       mapLink: mapLink ?? this.mapLink,
       message: message ?? this.message,
       timestamp: timestamp ?? this.timestamp,
+      emergencyType: emergencyType ?? this.emergencyType,
       metadata: metadata ?? this.metadata,
     );
+  }
+
+  /// Creates a copy of this alert with a specific emergency type.
+  /// Useful for escalation flows where type is determined after initial dispatch.
+  EmergencyAlert withEmergencyType(EmergencyType type) {
+    return copyWith(emergencyType: type);
   }
 
   // ----------------------------
@@ -140,8 +163,28 @@ class EmergencyAlert {
       'mapLink': mapLink,
       'message': message,
       'timestamp': timestamp.toIso8601String(),
+      'emergencyType': emergencyType.name,
       'metadata': metadata,
     };
+  }
+
+  factory EmergencyAlert.fromMap(Map<String, dynamic> map) {
+    return EmergencyAlert(
+      alertId: map['alertId'] as String?,
+      user: UserModel.fromMap(map['user'] as Map<String, dynamic>),
+      contacts: (map['contacts'] as List)
+          .map((c) => ContactModel.fromMap(c as Map<String, dynamic>))
+          .toList(),
+      latitude: (map['latitude'] as num).toDouble(),
+      longitude: (map['longitude'] as num).toDouble(),
+      mapLink: map['mapLink'] as String,
+      message: map['message'] as String,
+      timestamp: map['timestamp'] != null
+          ? DateTime.parse(map['timestamp'] as String)
+          : null,
+      emergencyType: EmergencyTypeExt.fromCode(map['emergencyType'] as String?),
+      metadata: (map['metadata'] as Map<String, dynamic>?) ?? const {},
+    );
   }
 
   @override
@@ -149,6 +192,7 @@ class EmergencyAlert {
     return 'EmergencyAlert('
         'alertId: $alertId, '
         'user: ${user.name}, '
+        'type: ${emergencyType.label}, '
         'contacts: ${contacts.length}, '
         'coordinates: $formattedCoordinates, '
         'timestamp: $formattedTimestamp)';

@@ -1,7 +1,7 @@
 // ============================================
 // Aarohan SOS Alert
 // File        : screens/success_screen.dart
-// Description : SOS Success Confirmation Screen (Sprint 3)
+// Description : SOS Success Confirmation Screen (Sprint 4 - With Escalation)
 // ============================================
 
 import 'package:flutter/material.dart';
@@ -12,6 +12,7 @@ import '../models/dispatch/emergency_alert.dart';
 import '../models/dispatch/dispatch_result.dart';
 import '../models/dispatch/strategy/strategy_result.dart';
 import 'dashboard_screen.dart';
+import 'emergency_escalation_screen.dart';
 
 class SuccessScreen extends StatefulWidget {
   final EmergencyAlert alert;
@@ -107,6 +108,22 @@ class _SuccessScreenState extends State<SuccessScreen>
       MaterialPageRoute(builder: (context) => const DashboardScreen()),
       (route) => false,
     );
+  }
+
+  // ----------------------------
+  // Escalation Trigger
+  // ----------------------------
+
+  Future<void> _onEscalatePressed() async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => EmergencyEscalationScreen(
+          alertContext: widget.alert,
+        ),
+      ),
+    );
+    // No action needed on return - escalation is separate workflow
   }
 
   // ----------------------------
@@ -294,6 +311,14 @@ class _SuccessScreenState extends State<SuccessScreen>
 
                 const SizedBox(height: paddingXLarge),
 
+                // ============================================
+                // SPRINT 4 - ESCALATE TO 112 BUTTON
+                // ============================================
+
+                _buildEscalationCard(),
+
+                const SizedBox(height: paddingLarge),
+
                 // Multi-Channel Breakdown (if strategy)
                 if (_isMultiChannel) _buildStrategyBreakdown(),
 
@@ -329,6 +354,116 @@ class _SuccessScreenState extends State<SuccessScreen>
   }
 
   // ----------------------------
+  // NEW - Escalation Card (Sprint 4)
+  // ----------------------------
+
+  Widget _buildEscalationCard() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(paddingMedium),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: [
+            primaryRed.withOpacity(0.15),
+            primaryRed.withOpacity(0.05),
+          ],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: primaryRed, width: 1.5),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Header
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: const BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: primaryRed,
+                ),
+                child: const Icon(
+                  Icons.priority_high,
+                  color: whiteColor,
+                  size: 18,
+                ),
+              ),
+              const SizedBox(width: paddingMedium),
+              const Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Need Official Emergency Services?',
+                      style: TextStyle(
+                        color: whiteColor,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 14,
+                      ),
+                    ),
+                    SizedBox(height: 2),
+                    Text(
+                      'Escalate to India\'s ERSS 112',
+                      style: TextStyle(
+                        color: mediumGrey,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+
+          const SizedBox(height: paddingMedium),
+
+          // Description
+          Text(
+            'Contacts trusted people are notified. For police, medical, '
+            'fire, or life-threatening emergencies, you can also contact '
+            'official emergency services.',
+            style: TextStyle(
+              color: whiteColor.withOpacity(0.8),
+              fontSize: 12,
+              height: 1.5,
+            ),
+          ),
+
+          const SizedBox(height: paddingMedium),
+
+          // Escalate Button
+          SizedBox(
+            width: double.infinity,
+            height: 48,
+            child: ElevatedButton.icon(
+              onPressed: _onEscalatePressed,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: primaryRed,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+              ),
+              icon: const Icon(Icons.call, color: whiteColor, size: 20),
+              label: const Text(
+                'ESCALATE TO 112',
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.bold,
+                  color: whiteColor,
+                  letterSpacing: 1.5,
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ----------------------------
   // Strategy Breakdown Card
   // ----------------------------
 
@@ -346,7 +481,6 @@ class _SuccessScreenState extends State<SuccessScreen>
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Header
           Row(
             children: [
               Icon(Icons.rocket_launch, color: _statusColor, size: 18),
@@ -384,7 +518,6 @@ class _SuccessScreenState extends State<SuccessScreen>
 
           const SizedBox(height: paddingMedium),
 
-          // Strategy Name
           Container(
             padding: const EdgeInsets.symmetric(
               horizontal: 10,
@@ -418,7 +551,6 @@ class _SuccessScreenState extends State<SuccessScreen>
 
           const SizedBox(height: paddingMedium),
 
-          // Individual Results
           const Text(
             'DISPATCH RESULTS',
             style: TextStyle(
@@ -435,7 +567,6 @@ class _SuccessScreenState extends State<SuccessScreen>
 
           const SizedBox(height: paddingMedium),
 
-          // Aggregate Stats
           Container(
             padding: const EdgeInsets.all(paddingSmall),
             decoration: BoxDecoration(
@@ -485,7 +616,7 @@ class _SuccessScreenState extends State<SuccessScreen>
   }
 
   // ----------------------------
-  // Single Dispatch Result Row
+  // Dispatch Result Row
   // ----------------------------
 
   Widget _buildDispatchResultRow(DispatchResult result) {
@@ -581,10 +712,6 @@ class _SuccessScreenState extends State<SuccessScreen>
     );
   }
 
-  // ----------------------------
-  // Stat Column
-  // ----------------------------
-
   Widget _buildStatColumn(
     String label,
     String value,
@@ -615,7 +742,7 @@ class _SuccessScreenState extends State<SuccessScreen>
   }
 
   // ----------------------------
-  // Single Dispatch Card (Legacy)
+  // Single Dispatch Card
   // ----------------------------
 
   Widget _buildSingleDispatchCard() {

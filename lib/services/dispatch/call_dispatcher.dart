@@ -1,31 +1,16 @@
 // ============================================
 // Aarohan SOS Alert
 // File        : services/dispatch/call_dispatcher.dart
-// Description : Call Dispatcher (Real Implementation)
-// Sprint      : 3 - Real Emergency Communication Layer
+// Description : Call Dispatcher (Sprint 4 - Refactored to use DialerGateway)
+// Sprint      : 4 - Emergency Dispatch Reliability & Official Escalation
 // ============================================
 
 import 'dart:developer' as developer;
-import 'dart:io' show Platform;
-import 'package:flutter_phone_direct_caller/flutter_phone_direct_caller.dart';
-import 'package:url_launcher/url_launcher.dart';
 import '../../models/dispatch/emergency_alert.dart';
 import '../../models/dispatch/dispatch_result.dart';
-import '../permission/permission_service.dart';
+import '../dialer/dialer_gateway.dart';
+import '../dialer/dialer_launch_result.dart';
 import 'dispatcher.dart';
-
-// ----------------------------
-// Call Mode
-// ----------------------------
-
-enum CallMode {
-  /// Directly initiates the call. Requires CALL_PHONE permission.
-  direct,
-
-  /// Opens the dialer with number pre-filled. No permission needed.
-  /// User must tap the call button.
-  dialer,
-}
 
 // ----------------------------
 // Call Dispatcher
@@ -34,38 +19,33 @@ enum CallMode {
 /// Dispatches emergency alerts by initiating a phone call to the primary
 /// emergency contact.
 ///
-/// STATUS: Fully Implemented (Sprint 3)
+/// STATUS: Fully Implemented (Sprint 4 - Refactored)
 ///
-/// Supports two modes:
-/// - [CallMode.direct] - Immediately calls (requires permission)
-/// - [CallMode.dialer] - Opens dialer with number (safer, no permission)
+/// Sprint 4 Refactor:
+/// - No longer contains platform-specific calling logic
+/// - Delegates all dialer resolution to DialerGateway
+/// - Focuses purely on dispatch semantics
+/// - Converts DialerLaunchResult → DispatchResult
 ///
-/// Default mode is [CallMode.dialer] for Play Store safety.
+/// This dispatcher is now a "clean" implementation of the Dispatcher contract:
+/// - Validates the alert
+/// - Extracts the primary contact
+/// - Delegates to DialerGateway
+/// - Returns structured DispatchResult
 ///
-/// User Flow (Dialer Mode - default):
-/// 1. Dispatcher extracts primary contact phone number
-/// 2. Android dialer opens with number pre-filled
-/// 3. User taps the green call button
-/// 4. Call initiated
-///
-/// User Flow (Direct Mode):
-/// 1. Dispatcher requests CALL_PHONE permission
-/// 2. Call is placed immediately without user tap
-/// 3. Android takes over the call UI
+/// It does NOT:
+/// - Handle Android platform specifics (that's DialerGateway's job)
+/// - Choose which dialer to use
+/// - Perform intent resolution
 class CallDispatcher extends Dispatcher {
   // ----------------------------
   // Configuration
   // ----------------------------
 
   final bool logToConsole;
-  final CallMode mode;
+  final DialerGateway _dialerGateway = DialerGateway();
 
-  CallDispatcher({
-    this.logToConsole = true,
-    this.mode = CallMode.dialer,
-  });
-
-  final PermissionService _permissionService = PermissionService();
+  CallDispatcher({this.logToConsole = true});
 
   // ----------------------------
   // Dispatcher Properties
@@ -79,17 +59,7 @@ class CallDispatcher extends Dispatcher {
 
   @override
   Future<bool> isAvailable() async {
-    try {
-      // Only Android and iOS supported
-      if (!Platform.isAndroid && !Platform.isIOS) {
-        _log('Call not supported on this platform');
-        return false;
-      }
-      return true;
-    } catch (e) {
-      _log('Availability check failed: $e');
-      return false;
-    }
+    return await _dialerGateway.canPlaceCall();
   }
 
   // ----------------------------
@@ -115,11 +85,13 @@ class CallDispatcher extends Dispatcher {
       );
     }
 
-    // Step 3 - Check platform
-    if (!Platform.isAndroid && !Platform.isIOS) {
+    // Step 3 - Check dialer capability via gateway
+    final canCall = await _dialerGateway.canPlaceCall();
+    if (!canCall) {
+      _log('Device cannot place calls');
       return DispatchResult.failure(
         method: method,
-        errorMessage: 'Call is only supported on Android and iOS',
+        errorMessage: 'This device does not support making phone calls',
         recipientCount: 1,
       );
     }
@@ -127,156 +99,104 @@ class CallDispatcher extends Dispatcher {
     // Step 4 - Log start
     _log('=== Call Dispatch Started ===');
     _log('Alert ID     : ${alert.alertId}');
-    _log('Mode         : ${mode.name}');
     _log('Primary      : ${primary.name}');
     _log('Number       : ${primary.phone}');
 
     // Step 5 - Pre-dispatch hook
     await onBeforeDispatch(alert);
 
-    try {
-      // Step 6 - Execute based on mode
-      DispatchResult result;
+    // Step 6 - Delegate to DialerGateway
+    final launchResult = await _dialerGateway.launchCall(primary.phone);
 
-      if (mode == CallMode.direct) {
-        result = await _executeDirectCall(alert, primary.phone, primary.name);
-      } else {
-        result = await _executeDialerCall(alert, primary.phone, primary.name);
-      }
-
-      _log('Call dispatch completed');
-      _log('Summary: ${result.summary}');
-      _log('=============================');
-
-      // Step 7 - Post-dispatch hook
-      await onAfterDispatch(alert, result);
-
-      return result;
-    } catch (e, stackTrace) {
-      _log('Call dispatch error: $e');
-      _log('Stack: $stackTrace');
-
-      return DispatchResult.failure(
-        method: method,
-        errorMessage: 'Call failed: ${e.toString()}',
-        recipientCount: 1,
-      );
-    }
-  }
-
-  // ----------------------------
-  // Direct Call (Requires Permission)
-  // ----------------------------
-
-  Future<DispatchResult> _executeDirectCall(
-    EmergencyAlert alert,
-    String phone,
-    String contactName,
-  ) async {
-    _log('Attempting direct call...');
-
-    // Request phone permission
-    final permResult = await _permissionService.requestPhone();
-
-    if (!permResult.granted) {
-      _log('Phone permission denied');
-
-      // Automatically fall back to dialer mode
-      _log('Falling back to dialer mode');
-      return _executeDialerCall(alert, phone, contactName);
-    }
-
-    // Execute direct call
-    final callSuccess = await FlutterPhoneDirectCaller.callNumber(phone);
-
-    if (callSuccess == true) {
-      _log('Direct call initiated successfully');
-      return DispatchResult.success(
-        method: method,
-        recipientCount: 1,
-        metadata: {
-          'alertId': alert.alertId,
-          'mode': 'direct',
-          'contactName': contactName,
-          'contactPhone': phone,
-          'timestamp': DateTime.now().toIso8601String(),
-        },
-      );
-    } else {
-      _log('Direct call failed');
-      return DispatchResult.failure(
-        method: method,
-        errorMessage: 'Failed to initiate direct call to $contactName',
-        recipientCount: 1,
-      );
-    }
-  }
-
-  // ----------------------------
-  // Dialer Call (No Permission Needed)
-  // ----------------------------
-
-  Future<DispatchResult> _executeDialerCall(
-    EmergencyAlert alert,
-    String phone,
-    String contactName,
-  ) async {
-    _log('Opening dialer with pre-filled number...');
-
-    // Sanitize phone number
-    final sanitized = _sanitizePhoneNumber(phone);
-    final telUri = Uri(scheme: 'tel', path: sanitized);
-
-    _log('Tel URI: $telUri');
-
-    // Check if URL can be launched
-    final canLaunch = await canLaunchUrl(telUri);
-    if (!canLaunch) {
-      _log('Cannot launch dialer');
-      return DispatchResult.failure(
-        method: method,
-        errorMessage: 'Cannot open phone dialer on this device',
-        recipientCount: 1,
-      );
-    }
-
-    // Launch dialer
-    final launched = await launchUrl(
-      telUri,
-      mode: LaunchMode.externalApplication,
+    // Step 7 - Convert DialerLaunchResult → DispatchResult
+    final dispatchResult = _convertLaunchResult(
+      launchResult: launchResult,
+      alert: alert,
+      contactName: primary.name,
     );
 
-    if (launched) {
-      _log('Dialer opened successfully');
+    _log('Call dispatch completed');
+    _log('Summary: ${dispatchResult.summary}');
+    _log('=============================');
+
+    // Step 8 - Post-dispatch hook
+    await onAfterDispatch(alert, dispatchResult);
+
+    return dispatchResult;
+  }
+
+  // ----------------------------
+  // Result Conversion
+  // ----------------------------
+
+  /// Converts platform-specific DialerLaunchResult into generic DispatchResult.
+  ///
+  /// This ensures the DispatchEngine and UI never see platform-specific types.
+  DispatchResult _convertLaunchResult({
+    required DialerLaunchResult launchResult,
+    required EmergencyAlert alert,
+    required String contactName,
+  }) {
+    if (launchResult.success) {
       return DispatchResult.success(
         method: method,
         recipientCount: 1,
         metadata: {
           'alertId': alert.alertId,
-          'mode': 'dialer',
           'contactName': contactName,
-          'contactPhone': phone,
-          'note': 'User must tap call button to initiate',
-          'timestamp': DateTime.now().toIso8601String(),
+          'contactPhone': launchResult.targetNumber,
+          'dialerName': launchResult.dialerName,
+          'launchMethod': launchResult.launchMethod.label,
+          'requiresUserConfirmation': launchResult.requiresUserConfirmation,
+          'note': launchResult.requiresUserConfirmation
+              ? 'User must tap call button in dialer'
+              : 'Call placed automatically',
+          'timestamp': launchResult.timestamp.toIso8601String(),
+          ...launchResult.metadata,
         },
       );
-    } else {
-      _log('Failed to open dialer');
-      return DispatchResult.failure(
-        method: method,
-        errorMessage: 'Failed to open phone dialer',
-        recipientCount: 1,
-      );
     }
-  }
 
-  // ----------------------------
-  // Phone Number Sanitization
-  // ----------------------------
+    // Handle specific error cases
+    switch (launchResult.errorCode) {
+      case DialerErrorCode.userCancelled:
+        return DispatchResult.skipped(
+          method: method,
+          reason: 'User cancelled the call',
+        );
 
-  String _sanitizePhoneNumber(String phone) {
-    // Keep only digits, +, and #
-    return phone.replaceAll(RegExp(r'[^\d+#]'), '');
+      case DialerErrorCode.noCallingCapability:
+      case DialerErrorCode.platformNotSupported:
+        return DispatchResult.failure(
+          method: method,
+          errorMessage: 'Device does not support calling',
+          recipientCount: 1,
+        );
+
+      case DialerErrorCode.noCompatibleDialer:
+        return DispatchResult.failure(
+          method: method,
+          errorMessage: 'No compatible dialer app found on this device',
+          recipientCount: 1,
+        );
+
+      case DialerErrorCode.invalidNumber:
+        return DispatchResult.failure(
+          method: method,
+          errorMessage: 'Invalid phone number for $contactName',
+          recipientCount: 1,
+        );
+
+      case DialerErrorCode.intentLaunchFailed:
+      case DialerErrorCode.unknown:
+      default:
+        return DispatchResult.failure(
+          method: method,
+          errorMessage:
+              launchResult.errorMessage ?? 'Failed to open phone dialer',
+          recipientCount: 1,
+        );
+    }
   }
 
   // ----------------------------
